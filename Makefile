@@ -9,7 +9,7 @@ endif
 # EVENT_NAME = Computer Night 2006
 # EVENT_HOST = 172.30.100.1
 
-CFLAGS += -pedantic -std=gnu99 -Wall -DREVISION="\"$(REVISION)\""
+CFLAGS += -pedantic -std=gnu99 -Wall -DREVISION="\"$(REVISION)\"" -ldl -Wl,--no-as-needed
 LUA     = lua-5.1.2
 
 ifdef EVENT_NAME
@@ -25,7 +25,7 @@ ifdef WINDOWS
 endif
 
 ifdef OPTIMIZE
-	CFLAGS += -O3 -DNDEBUG
+	CFLAGS += -O3 -DNDEBUG 
 else
 	CFLAGS += -ggdb
 endif
@@ -96,7 +96,7 @@ $(GL_RENDERER)      : LDFLAGS  += $(MINGW)/lib/libSGE.a $(MINGW)/lib/libevent.a 
                                   -lmingw32 -lopengl32 -lglu32 -lstdc++ -lwsock32 -lwinmm -mwindows -Wl,-s
 $(GL_RENDERER)      : infon.res
 else
-$(INFON_EXECUTABLE) : LDFLAGS  += -levent -lz -lm 
+$(INFON_EXECUTABLE) : LDFLAGS  += -levent -lz -lm
 
 # Example for embedding a renderer
 ifdef NULL_INFON
@@ -114,7 +114,7 @@ endif
 endif
 
 $(INFOND_EXECUTABLE): CFLAGS   += -I$(LUA)/src/ # -DCHEATS
-$(INFOND_EXECUTABLE): LDFLAGS  += -levent -lz -lm
+$(INFOND_EXECUTABLE): LDFLAGS  += -levent -lz -lm -ldl -Wl,--no-as-needed
 
 # Experimental usage of 'all of lua in one file' as seen in lua-5.1.2/etc/all.c
 ifdef OPTIMIZE
