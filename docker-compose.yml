@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile.dev
     ports:
-      - "3000:3000"
+      - "3030:3000"
     volumes:
       - ./backend/src:/app/backend/src
       - ./backend/tests:/app/backend/tests
