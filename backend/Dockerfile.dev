@@ -1,0 +1,27 @@
+FROM rust:1.83-bookworm
+
+# Install cargo-watch for auto-reload
+RUN cargo install cargo-watch
+
+# Install build dependencies for mlua (lua51 vendored) and SQLite
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libreadline-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/backend
+
+# Pre-fetch dependencies by copying manifests first (layer caching)
+COPY backend/Cargo.toml backend/Cargo.lock* ./
+RUN mkdir src && echo 'fn main() { println!("placeholder"); }' > src/main.rs
+RUN cargo build 2>/dev/null || true
+RUN rm -rf src
+
+# The actual source is volume-mounted at runtime, so no COPY of src here.
+
+EXPOSE 3000
+
+# Use cargo-watch: rebuild and restart on any .rs file change.
+# -w also watches orig_game for Lua file changes (used by include_str!).
+CMD ["cargo", "watch", "-x", "run", "-w", "src", "-w", "tests", "-w", "/app/orig_game"]

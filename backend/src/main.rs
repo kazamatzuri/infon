@@ -17,7 +17,9 @@ async fn health_check() -> Json<Value> {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let db = db::Database::new("sqlite:infon.db?mode=rwc")
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:infon.db?mode=rwc".to_string());
+    let db = db::Database::new(&db_url)
         .await
         .expect("Failed to initialize database");
     let db = Arc::new(db);
