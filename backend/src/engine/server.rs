@@ -113,7 +113,7 @@ impl GameServer {
 
             // Spawn initial creatures for each player on random walkable tiles
             for &pid in &player_ids {
-                let initial_creatures = 5;
+                let initial_creatures = 2;
                 for _ in 0..initial_creatures {
                     let tile = game.world.borrow().find_plain_tile();
                     if let Some((tx_pos, ty_pos)) = tile {

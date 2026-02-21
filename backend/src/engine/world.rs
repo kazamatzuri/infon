@@ -183,6 +183,7 @@ impl World {
         }
         let idx = self.index(x, y);
         self.tiles[idx].tile_type = tile_type;
+        self.tiles[idx].gfx = TILE_GFX_PLAIN;
         true
     }
 
