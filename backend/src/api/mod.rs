@@ -13,8 +13,11 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
+use std::path::PathBuf;
+
 use crate::db::Database;
-use crate::engine::server::{GameServer, PlayerEntry};
+use crate::engine::server::{self, GameServer, PlayerEntry};
+use crate::engine::world::World;
 
 // ── Request types ─────────────────────────────────────────────────────
 
@@ -51,6 +54,7 @@ pub struct AddTournamentEntryRequest {
 #[derive(Deserialize)]
 pub struct StartGameRequest {
     pub players: Vec<StartGamePlayer>,
+    pub map: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +69,7 @@ pub struct StartGamePlayer {
 pub struct AppState {
     pub db: Arc<Database>,
     pub game_server: Arc<GameServer>,
+    pub maps_dir: PathBuf,
 }
 
 // ── Error helper ──────────────────────────────────────────────────────
@@ -84,9 +89,16 @@ fn internal_error(e: sqlx::Error) -> impl IntoResponse {
 // ── Router ────────────────────────────────────────────────────────────
 
 pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
-    let state = AppState { db, game_server };
+    let maps_dir = PathBuf::from("data/maps");
+    let state = AppState {
+        db,
+        game_server,
+        maps_dir,
+    };
 
     Router::new()
+        // Maps
+        .route("/api/maps", get(list_maps))
         // Bots
         .route("/api/bots", get(list_bots).post(create_bot))
         .route(
@@ -420,8 +432,19 @@ async fn run_tournament(
         });
     }
 
-    // Create world (use default for MVP)
-    let world = GameServer::default_world();
+    // Create world from tournament map setting
+    let map_name = if tournament.map == "default" {
+        None
+    } else {
+        Some(tournament.map.clone())
+    };
+    let world = match resolve_map(&state.maps_dir, &map_name) {
+        Ok(w) => w,
+        Err(e) => {
+            return json_error(StatusCode::BAD_REQUEST, &format!("Invalid map: {}", e))
+                .into_response()
+        }
+    };
 
     // Update tournament status
     let _ = state
@@ -442,6 +465,32 @@ async fn run_tournament(
         )
             .into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+// ── Map handlers ─────────────────────────────────────────────────────
+
+async fn list_maps(State(state): State<AppState>) -> impl IntoResponse {
+    let mut maps = server::list_maps(&state.maps_dir);
+    // Prepend a "Random" pseudo-entry
+    maps.insert(
+        0,
+        server::MapInfo {
+            name: "random".to_string(),
+            width: 30,
+            height: 30,
+            description: "Randomly generated map".to_string(),
+        },
+    );
+    (StatusCode::OK, Json(json!(maps))).into_response()
+}
+
+/// Resolve an optional map name to a World.
+fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World, String> {
+    use crate::engine::world::RandomMapParams;
+    match map.as_deref() {
+        None | Some("random") => Ok(World::generate_random(RandomMapParams::default())),
+        Some(name) => server::load_map(maps_dir, name),
     }
 }
 
@@ -486,7 +535,13 @@ async fn start_game(
         });
     }
 
-    let world = GameServer::default_world();
+    let world = match resolve_map(&state.maps_dir, &req.map) {
+        Ok(w) => w,
+        Err(e) => {
+            return json_error(StatusCode::BAD_REQUEST, &format!("Invalid map: {}", e))
+                .into_response()
+        }
+    };
 
     match state.game_server.start_game(world, players, None) {
         Ok(()) => (

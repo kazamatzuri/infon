@@ -1,10 +1,31 @@
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::cmp::Ordering;
 
 use rand::Rng;
 use serde::Deserialize;
 
 use super::config::*;
+
+/// Parameters for random map generation.
+pub struct RandomMapParams {
+    pub width: usize,
+    pub height: usize,
+    pub wall_density: f64,
+    pub food_amount: i32,
+    pub num_food_spots: usize,
+}
+
+impl Default for RandomMapParams {
+    fn default() -> Self {
+        Self {
+            width: 30,
+            height: 30,
+            wall_density: 0.35,
+            food_amount: 50000,
+            num_food_spots: 10,
+        }
+    }
+}
 
 /// A single tile in the world grid.
 #[derive(Clone, Debug)]
@@ -99,6 +120,169 @@ impl World {
             koth_y: height / 2,
             food_spawners: Vec::new(),
         }
+    }
+
+    /// Generate a random world using cellular automata for organic wall patterns.
+    ///
+    /// Algorithm:
+    /// 1. Create world with solid border, plain interior
+    /// 2. Randomly seed ~wall_density fraction of interior as solid
+    /// 3. Run 5 iterations of cellular automata smoothing
+    /// 4. Flood-fill to find largest connected walkable region; fill smaller regions with solid
+    /// 5. Place KOTH at nearest walkable tile to map center
+    /// 6. Scatter food spawners on random walkable tiles
+    pub fn generate_random(params: RandomMapParams) -> Self {
+        let width = params.width.clamp(20, 64);
+        let height = params.height.clamp(20, 64);
+        let wall_density = params.wall_density.clamp(0.0, 0.6);
+        let mut rng = rand::thread_rng();
+
+        // Step 1 & 2: Start with all plain interior, then seed walls randomly
+        let mut grid = vec![vec![TILE_SOLID; width]; height];
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                if rng.gen::<f64>() < wall_density {
+                    grid[y][x] = TILE_SOLID;
+                } else {
+                    grid[y][x] = TILE_PLAIN;
+                }
+            }
+        }
+
+        // Step 3: Cellular automata smoothing (5 iterations)
+        for _ in 0..5 {
+            let mut new_grid = grid.clone();
+            for y in 1..height - 1 {
+                for x in 1..width - 1 {
+                    let mut solid_neighbors = 0;
+                    for dy in -1i32..=1 {
+                        for dx in -1i32..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = (x as i32 + dx) as usize;
+                            let ny = (y as i32 + dy) as usize;
+                            if grid[ny][nx] == TILE_SOLID {
+                                solid_neighbors += 1;
+                            }
+                        }
+                    }
+                    if solid_neighbors >= 5 {
+                        new_grid[y][x] = TILE_SOLID;
+                    } else if solid_neighbors <= 3 {
+                        new_grid[y][x] = TILE_PLAIN;
+                    }
+                    // 4 neighbors: keep current state
+                }
+            }
+            grid = new_grid;
+        }
+
+        // Step 4: Flood-fill to find the largest connected walkable region
+        let mut visited = vec![vec![false; width]; height];
+        let mut regions: Vec<Vec<(usize, usize)>> = Vec::new();
+
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                if grid[y][x] == TILE_PLAIN && !visited[y][x] {
+                    // BFS flood fill
+                    let mut region = Vec::new();
+                    let mut queue = VecDeque::new();
+                    queue.push_back((x, y));
+                    visited[y][x] = true;
+
+                    while let Some((cx, cy)) = queue.pop_front() {
+                        region.push((cx, cy));
+                        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                            let nx = (cx as i32 + dx) as usize;
+                            let ny = (cy as i32 + dy) as usize;
+                            if nx >= 1 && nx < width - 1 && ny >= 1 && ny < height - 1
+                                && grid[ny][nx] == TILE_PLAIN
+                                && !visited[ny][nx]
+                            {
+                                visited[ny][nx] = true;
+                                queue.push_back((nx, ny));
+                            }
+                        }
+                    }
+                    regions.push(region);
+                }
+            }
+        }
+
+        // Find the largest region
+        let largest_idx = regions
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, r)| r.len())
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        // Convert all non-largest regions to solid
+        let mut largest_set = std::collections::HashSet::new();
+        if !regions.is_empty() {
+            for &(x, y) in &regions[largest_idx] {
+                largest_set.insert((x, y));
+            }
+        }
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                if grid[y][x] == TILE_PLAIN && !largest_set.contains(&(x, y)) {
+                    grid[y][x] = TILE_SOLID;
+                }
+            }
+        }
+
+        // Build the actual World from the grid
+        let mut world = World::new(width, height);
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                if grid[y][x] == TILE_PLAIN {
+                    world.set_type(x, y, TILE_PLAIN);
+                }
+            }
+        }
+
+        // Step 5: Place KOTH at nearest walkable tile to map center
+        let center_x = width / 2;
+        let center_y = height / 2;
+        let mut best_koth = (center_x, center_y);
+        let mut best_dist = usize::MAX;
+        if !regions.is_empty() {
+            for &(x, y) in &regions[largest_idx] {
+                let dx = if x >= center_x { x - center_x } else { center_x - x };
+                let dy = if y >= center_y { y - center_y } else { center_y - y };
+                let dist = dx * dx + dy * dy;
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_koth = (x, y);
+                }
+            }
+        }
+        world.koth_x = best_koth.0;
+        world.koth_y = best_koth.1;
+
+        // Step 6: Scatter food spawners on random walkable tiles
+        if !regions.is_empty() && !regions[largest_idx].is_empty() {
+            let walkable = &regions[largest_idx];
+            let food_per_spot = params.food_amount / params.num_food_spots.max(1) as i32;
+            let num_spots = params.num_food_spots.min(walkable.len());
+
+            for _ in 0..num_spots {
+                let idx = rng.gen_range(0..walkable.len());
+                let (fx, fy) = walkable[idx];
+                let radius = rng.gen_range(2..=4);
+                world.food_spawners.push(FoodSpawner {
+                    x: fx,
+                    y: fy,
+                    radius,
+                    amount: food_per_spot,
+                    interval: 50,
+                });
+            }
+        }
+
+        world
     }
 
     /// Load a world from the JSON map format.

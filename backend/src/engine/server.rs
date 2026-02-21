@@ -1,6 +1,7 @@
 // Game server: manages a running game instance and broadcasts state to WebSocket clients.
 
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +10,66 @@ use tokio::sync::broadcast;
 
 use super::config::*;
 use super::game::{Game, GameSnapshot, PlayerSnapshot, WorldSnapshot};
-use super::world::World;
+use super::world::{RandomMapParams, World};
+
+/// Metadata about an available map file.
+#[derive(Debug, Clone, Serialize)]
+pub struct MapInfo {
+    pub name: String,
+    pub width: usize,
+    pub height: usize,
+    pub description: String,
+}
+
+/// Scan a directory for `*.json` map files and return their metadata, sorted by name.
+pub fn list_maps(maps_dir: &Path) -> Vec<MapInfo> {
+    let mut maps = Vec::new();
+
+    let entries = match std::fs::read_dir(maps_dir) {
+        Ok(e) => e,
+        Err(_) => return maps,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        // Parse just enough to get width/height
+        #[derive(serde::Deserialize)]
+        struct MapMeta {
+            width: usize,
+            height: usize,
+        }
+        if let Ok(meta) = serde_json::from_str::<MapMeta>(&contents) {
+            maps.push(MapInfo {
+                name: stem,
+                width: meta.width,
+                height: meta.height,
+                description: format!("{}x{} map", meta.width, meta.height),
+            });
+        }
+    }
+
+    maps.sort_by(|a, b| a.name.cmp(&b.name));
+    maps
+}
+
+/// Load a map by name from the given directory. Returns a World or an error message.
+pub fn load_map(maps_dir: &Path, name: &str) -> Result<World, String> {
+    let path = maps_dir.join(format!("{}.json", name));
+    let contents =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read map '{}': {}", name, e))?;
+    World::from_json(&contents)
+}
 
 /// Messages sent from the game loop to WebSocket clients.
 #[derive(Clone, Serialize, Debug)]
@@ -195,35 +255,9 @@ impl GameServer {
         Ok(())
     }
 
-    /// Create a default 20x20 world with walkable interior and some food.
+    /// Create a default world using random map generation.
     pub fn default_world() -> World {
-        let size = 20;
-        let mut world = World::new(size, size);
-
-        // Make interior walkable
-        for y in 1..size - 1 {
-            for x in 1..size - 1 {
-                world.set_type(x, y, TILE_PLAIN);
-            }
-        }
-
-        // Scatter food on several tiles
-        let food_positions = [
-            (3, 3),
-            (3, 16),
-            (16, 3),
-            (16, 16),
-            (10, 10),
-            (5, 10),
-            (15, 10),
-            (10, 5),
-            (10, 15),
-        ];
-        for (fx, fy) in food_positions {
-            world.add_food(fx, fy, 5000);
-        }
-
-        world
+        World::generate_random(RandomMapParams::default())
     }
 }
 
@@ -240,11 +274,15 @@ mod tests {
     #[test]
     fn test_default_world() {
         let world = GameServer::default_world();
-        assert_eq!(world.width, 20);
-        assert_eq!(world.height, 20);
-        assert!(world.is_walkable(5, 5));
+        assert_eq!(world.width, 30);
+        assert_eq!(world.height, 30);
+        // Border should always be solid
         assert!(!world.is_walkable(0, 0));
-        assert!(world.get_food(10, 10) > 0);
+        assert!(!world.is_walkable(29, 29));
+        // Should have some walkable tiles
+        assert!(world.find_plain_tile().is_some());
+        // Should have food spawners
+        assert!(!world.food_spawners.is_empty());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GameCanvas } from '../components/GameCanvas';
 import { api } from '../api/client';
-import type { Bot, BotVersion } from '../api/client';
+import type { Bot, BotVersion, MapInfo } from '../api/client';
 
 const WS_URL = `ws://${window.location.host}/ws/game`;
 
@@ -19,6 +19,8 @@ export function GameViewer() {
     { botId: null, versionId: null, name: 'Player 1' },
     { botId: null, versionId: null, name: 'Player 2' },
   ]);
+  const [maps, setMaps] = useState<MapInfo[]>([]);
+  const [selectedMap, setSelectedMap] = useState<string>('random');
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -27,11 +29,13 @@ export function GameViewer() {
   useEffect(() => {
     (async () => {
       try {
-        const [status, botList] = await Promise.all([
+        const [status, botList, mapList] = await Promise.all([
           api.gameStatus(),
           api.listBots(),
+          api.listMaps().catch(() => [] as MapInfo[]),
         ]);
         setBots(botList);
+        setMaps(mapList);
         if (status.running) {
           setPhase('running');
         } else {
@@ -101,7 +105,7 @@ export function GameViewer() {
 
     setStarting(true);
     try {
-      await api.startGame(players);
+      await api.startGame(players, selectedMap);
       setPhase('running');
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to start game');
@@ -166,6 +170,23 @@ export function GameViewer() {
         </div>
       ) : (
         <>
+          <div style={{ marginBottom: '1rem' }}>
+            <label htmlFor="map-select" style={{ fontWeight: 'bold', marginRight: '0.5rem' }}>Map:</label>
+            <select
+              id="map-select"
+              value={selectedMap}
+              onChange={(e) => setSelectedMap(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="random">Random</option>
+              {maps.map(m => (
+                <option key={m.name} value={m.name}>
+                  {m.name} ({m.width}x{m.height})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
             {slots.map((slot, i) => (
               <div key={i} style={{ background: '#16213e', borderRadius: '8px', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>

@@ -35,6 +35,13 @@ export interface TournamentEntry {
   version?: number;
 }
 
+export interface MapInfo {
+  name: string;
+  width: number;
+  height: number;
+  description: string;
+}
+
 export interface TournamentResult {
   player_id: number;
   player_name: string;
@@ -192,11 +199,14 @@ export const api = {
   gameStatus: (): Promise<{ running: boolean }> =>
     fetch(`${BASE_URL}/api/game/status`).then(r => handleResponse<{ running: boolean }>(r)),
 
-  startGame: (players: { bot_version_id: number; name?: string }[]): Promise<{ status: string; message: string }> =>
+  listMaps: (): Promise<MapInfo[]> =>
+    fetch(`${BASE_URL}/api/maps`).then(r => handleResponse<MapInfo[]>(r)),
+
+  startGame: (players: { bot_version_id: number; name?: string }[], map?: string): Promise<{ status: string; message: string }> =>
     fetch(`${BASE_URL}/api/game/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ players }),
+      body: JSON.stringify({ players, map }),
     }).then(r => handleResponse<{ status: string; message: string }>(r)),
 
   stopGame: (): Promise<void> =>
