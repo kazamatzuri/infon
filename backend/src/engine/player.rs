@@ -41,6 +41,79 @@ impl Player {
         .exec()
         .map_err(|e| format!("Failed to set up _TRACEBACK/epcall: {e}"))?;
 
+        // Compatibility aliases and bootstrap (from original player.lua)
+        let bootstrap = format!(
+            r#"
+-- Compatibility aliases (from player.lua)
+nearest_enemy = get_nearest_enemy
+exists = creature_exists
+
+-- creature_config metatable
+creature_config = setmetatable({{}}, {{
+    __index = function(t, val)
+        return creature_get_config(val)
+    end
+}})
+
+-- needs_api function (validates API type)
+do
+    local _api_type = "{api_type}"
+    function needs_api(needed)
+        assert(needed == _api_type, "This Code needs the API '" .. needed .. "' but '" .. _api_type .. "' is loaded")
+    end
+end
+
+-- Switch print to client_print
+print = client_print
+
+-- p() pretty-print helper
+function p(x)
+    if type(x) == "table" then
+        print("+--- Table: " .. tostring(x))
+        for key, val in pairs(x) do
+            print("| " .. tostring(key) .. " " .. tostring(val))
+        end
+        print("+-----------------------")
+    else
+        print(type(x) .. " - " .. tostring(x))
+    end
+end
+
+-- restart and info functions used by oo.lua
+function restart()
+    for id, creature in pairs(creatures) do
+        creature:restart()
+    end
+end
+
+function info()
+    for id, creature in pairs(creatures) do
+        print(tostring(creature))
+    end
+end
+
+-- Default onCommand
+function onCommand(cmd)
+    print("huh? use '?' for help")
+end
+
+-- Disable dangerous functions for sandbox
+debug = nil
+load = nil
+require = nil
+loadfile = nil
+os = nil
+package = nil
+io = nil
+module = nil
+collectgarbage = nil
+"#
+        );
+        lua.load(&bootstrap)
+            .set_name("bootstrap")
+            .exec()
+            .map_err(|e| format!("Failed to load bootstrap: {e}"))?;
+
         // Load the high-level API
         let api_code = match api_type {
             "oo" => include_str!("../../../orig_game/api/oo.lua"),
