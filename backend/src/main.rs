@@ -2,8 +2,10 @@ mod api;
 mod db;
 mod engine;
 
+use std::sync::Arc;
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
+use tower_http::cors::CorsLayer;
 
 async fn health_check() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "infon-backend" }))
@@ -13,7 +15,15 @@ async fn health_check() -> Json<Value> {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let app = Router::new().route("/health", get(health_check));
+    let db = db::Database::new("sqlite:infon.db?mode=rwc")
+        .await
+        .expect("Failed to initialize database");
+    let db = Arc::new(db);
+
+    let app = Router::new()
+        .route("/health", get(health_check))
+        .merge(api::router(db))
+        .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
