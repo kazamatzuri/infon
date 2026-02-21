@@ -41,9 +41,9 @@ Build a web-based version of Infon Battle Arena where players write Lua bots in 
 |-------|-----------|-----------|
 | Frontend | React + TypeScript | Modern, well-supported SPA framework |
 | Code Editor | Monaco Editor | VS Code editor in browser, excellent Lua support |
-| Game Renderer | HTML5 Canvas / PixiJS | 2D rendering, performant for many sprites |
-| Backend | Go or Rust | Good Lua embedding, performant game engine |
-| Lua Runtime | Lua 5.1 (C-embedded) | Exact compatibility with original bot API |
+| Game Renderer | PixiJS | Sprite-based 2D rendering using original game sprites |
+| Backend | Rust (Axum) | Memory-safe Lua sandboxing via mlua, real Lua 5.1 compatibility |
+| Lua Runtime | Lua 5.1 via mlua | Exact compatibility with original bot API, built-in sandbox mode |
 | Database | SQLite | Simple, no separate server, perfect for MVP |
 | Build/Dev | `just` (justfile) | Simple task runner for dev workflow |
 | API | REST (JSON) | Simple, well-understood for CRUD operations |
@@ -159,9 +159,9 @@ Server -> Client messages:
 - View results (scores, replay)
 
 #### 4d. Game Renderer
-- HTML5 Canvas or PixiJS
+- PixiJS with original game sprites
 - Render tile map (walls, ground, food levels)
-- Render creatures (colored by player, type determines sprite/shape)
+- Render creatures (colored by player, type determines sprite)
 - Show creature messages
 - Show health/food bars
 - King of the Hill indicator
@@ -289,7 +289,7 @@ dev: dev-backend dev-frontend
 
 # Start backend server
 dev-backend:
-    cd backend && go run ./cmd/server
+    cd backend && cargo run --bin server
 
 # Start frontend dev server
 dev-frontend:
@@ -297,7 +297,7 @@ dev-frontend:
 
 # Run database migrations
 db-migrate:
-    cd backend && go run ./cmd/migrate
+    cd backend && cargo run --bin migrate
 
 # Reset database
 db-reset:
@@ -306,7 +306,7 @@ db-reset:
 
 # Run backend tests
 test-backend:
-    cd backend && go test ./...
+    cd backend && cargo test
 
 # Run frontend tests
 test-frontend:
@@ -317,12 +317,12 @@ test: test-backend test-frontend
 
 # Build for production
 build:
-    cd backend && go build -o ../dist/infon-server ./cmd/server
+    cd backend && cargo build --release
     cd frontend && npm run build
 
 # Validate bot compatibility (run original bots through engine)
 validate-bots:
-    cd backend && go test ./engine -run TestOriginalBots -v
+    cd backend && cargo test --package engine -- original_bots --nocapture
 ```
 
 ## Compatibility Strategy
@@ -368,13 +368,13 @@ get_cpu_usage()
 print(msg)
 ```
 
-## Open Questions / Decisions Needed
+## Decisions
 
-1. **Backend language**: Go (with golua or gopher-lua) vs Rust (with rlua/mlua)? Go is simpler; Rust is more performant but harder to develop.
-2. **Renderer**: Plain Canvas vs PixiJS? PixiJS for better sprite handling if we want nice graphics; plain Canvas simpler for MVP.
-3. **Map format**: Port original Lua map files or define a new JSON format? Recommendation: support both.
-4. **Game speed**: Should tournament matches run at real-time (100ms/tick) or accelerated? Recommendation: configurable, default real-time for watching.
-5. **Multiple simultaneous games**: MVP just runs one game at a time? Recommendation: yes, one at a time for MVP.
+1. **Backend language**: Rust + mlua. Real Lua 5.1 C engine with safe Rust FFI wrappers. Best combination of exact bot compatibility and memory-safe sandboxing for untrusted player code.
+2. **Renderer**: PixiJS. Using original game sprites, PixiJS provides efficient sprite batching and a mature 2D rendering pipeline.
+3. **Map format**: JSON. Convert original Lua maps to a JSON format. Server loads JSON maps into the game engine - simpler than running Lua map scripts, and the frontend can fetch the same JSON for rendering.
+4. **Game speed**: Real-time (100ms/tick) for the web UI. A future v2.0 headless tournament runner will run as fast as possible without rendering.
+5. **Multiple simultaneous games**: MVP supports one game per server. Architecture should keep game state isolated (no globals) so multiple games can be added later.
 
 ## File Structure
 
