@@ -19,6 +19,14 @@ test-backend:
 test-frontend:
     cd frontend && npm test
 
+# Build frontend for production
+build-frontend:
+    cd frontend && npm run build
+
+# Install frontend dependencies
+install-frontend:
+    cd frontend && npm install
+
 # Run all tests
 test: test-backend
 

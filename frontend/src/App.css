@@ -1,0 +1,39 @@
+#root {
+  height: 100vh;
+}
+
+.app-nav {
+  padding: 12px 24px;
+  background: #1a1a2e;
+  border-bottom: 1px solid #333;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 20px;
+  color: #e94560;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.nav-link {
+  color: #888;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 4px 0;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.nav-link:hover {
+  color: #e0e0e0;
+}
+
+.nav-link-active {
+  color: #16c79a;
+  border-bottom-color: #16c79a;
+}
