@@ -1,6 +1,8 @@
 # Infon Development Task Runner
 # Use `just <recipe>` to run. Docker recipes are the default workflow;
 # prefix with `local-` to run directly on the host.
+#
+# Cross-platform: works on Windows, macOS, and Linux without shell assumptions.
 
 # ---------- Docker Compose (default workflow) ----------
 
@@ -84,49 +86,47 @@ status:
     docker compose ps
 
 # ---------- Local development (no Docker) ----------
-
-# Start both backend and frontend locally
-local-dev: local-dev-backend local-dev-frontend
+# Uses --manifest-path and --prefix to avoid shell-specific `cd &&` patterns.
 
 # Start backend server locally
 local-dev-backend:
-    cd backend && cargo run
+    cargo run --manifest-path backend/Cargo.toml
 
 # Start frontend dev server locally
 local-dev-frontend:
-    cd frontend && npm run dev
+    npm --prefix frontend run dev
 
 # Run backend tests locally
 local-test-backend:
-    cd backend && cargo test
+    cargo test --manifest-path backend/Cargo.toml
 
 # Run frontend tests locally
 local-test-frontend:
-    cd frontend && npm test
+    npm --prefix frontend test
 
 # Run all local tests
 local-test: local-test-backend
 
 # Build backend locally (release)
 local-build-backend:
-    cd backend && cargo build --release
+    cargo build --manifest-path backend/Cargo.toml --release
 
 # Build frontend locally (production)
 local-build-frontend:
-    cd frontend && npm run build
+    npm --prefix frontend run build
 
 # Check code locally
 local-check:
-    cd backend && cargo clippy -- -D warnings
+    cargo clippy --manifest-path backend/Cargo.toml -- -D warnings
 
 # Format code locally
 local-fmt:
-    cd backend && cargo fmt
+    cargo fmt --manifest-path backend/Cargo.toml
 
 # Validate bot compatibility locally
 local-validate-bots:
-    cd backend && cargo test -- original_bots --nocapture
+    cargo test --manifest-path backend/Cargo.toml -- original_bots --nocapture
 
 # Install frontend dependencies locally
 local-install-frontend:
-    cd frontend && npm install
+    npm --prefix frontend install
