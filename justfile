@@ -2,7 +2,8 @@
 # Use `just <recipe>` to run. Docker recipes are the default workflow;
 # prefix with `local-` to run directly on the host.
 #
-# Cross-platform: works on Windows, macOS, and Linux without shell assumptions.
+# Cross-platform: works on Windows, macOS, and Linux.
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # ---------- Docker Compose (default workflow) ----------
 
