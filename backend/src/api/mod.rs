@@ -48,6 +48,17 @@ pub struct AddTournamentEntryRequest {
     pub slot_name: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct StartGameRequest {
+    pub players: Vec<StartGamePlayer>,
+}
+
+#[derive(Deserialize)]
+pub struct StartGamePlayer {
+    pub bot_version_id: i64,
+    pub name: Option<String>,
+}
+
 // ── Shared application state ─────────────────────────────────────────
 
 #[derive(Clone)]
@@ -113,7 +124,8 @@ pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
         )
         // Tournament run
         .route("/api/tournaments/{id}/run", post(run_tournament))
-        // Game status
+        // Game control
+        .route("/api/game/start", post(start_game))
         .route("/api/game/status", get(game_status))
         .route("/api/game/stop", post(stop_game))
         // WebSocket
@@ -434,6 +446,60 @@ async fn run_tournament(
 }
 
 // ── Game control handlers ────────────────────────────────────────────
+
+async fn start_game(
+    State(state): State<AppState>,
+    Json(req): Json<StartGameRequest>,
+) -> impl IntoResponse {
+    if state.game_server.is_running() {
+        return json_error(StatusCode::CONFLICT, "A game is already running").into_response();
+    }
+
+    if req.players.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "At least one player is required")
+            .into_response();
+    }
+
+    let mut players = Vec::new();
+    for (i, p) in req.players.iter().enumerate() {
+        let version = match state.db.get_bot_version_by_id(p.bot_version_id).await {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                return json_error(
+                    StatusCode::NOT_FOUND,
+                    &format!("Bot version {} not found", p.bot_version_id),
+                )
+                .into_response();
+            }
+            Err(e) => return internal_error(e).into_response(),
+        };
+
+        let name = p
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Player {}", i + 1));
+
+        players.push(PlayerEntry {
+            name,
+            code: version.code,
+            api_type: version.api_type,
+        });
+    }
+
+    let world = GameServer::default_world();
+
+    match state.game_server.start_game(world, players, None) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "status": "running",
+                "message": "Game started. Connect to /ws/game for live updates."
+            })),
+        )
+            .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
 
 async fn game_status(State(state): State<AppState>) -> impl IntoResponse {
     let running = state.game_server.is_running();

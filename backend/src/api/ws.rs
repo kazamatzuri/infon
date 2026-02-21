@@ -21,6 +21,13 @@ pub async fn ws_game(
 async fn handle_ws(mut socket: WebSocket, state: AppState) {
     let mut rx = state.game_server.subscribe();
 
+    // Send cached world snapshot so late joiners see the map immediately.
+    if let Some(world_json) = state.game_server.world_json() {
+        if socket.send(Message::Text(world_json.into())).await.is_err() {
+            return;
+        }
+    }
+
     // Forward all broadcast messages to the WebSocket client.
     // When the client disconnects or the broadcast channel closes, we stop.
     loop {

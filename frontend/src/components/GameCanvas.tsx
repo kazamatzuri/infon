@@ -105,7 +105,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
         ctx.fillStyle = '#333';
         ctx.fillRect(cx - 8, cy - 14, 16, 3);
         // Health bar fill
-        const healthPct = c.health / 100;
+        const healthPct = c.max_health > 0 ? c.health / c.max_health : 0;
         ctx.fillStyle = healthPct > 0.5 ? '#0f0' : healthPct > 0.25 ? '#ff0' : '#f00';
         ctx.fillRect(cx - 8, cy - 14, 16 * healthPct, 3);
 
@@ -212,7 +212,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
             Game Time
           </div>
           <div style={{ color: '#e0e0e0', fontSize: '24px', fontWeight: 700, fontFamily: 'monospace' }}>
-            {Math.floor(gameTime / 10)}s
+            {Math.floor(gameTime / 1000)}s
           </div>
         </div>
 

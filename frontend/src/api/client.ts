@@ -1,4 +1,4 @@
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = '';
 
 export interface Bot {
   id: number;
@@ -84,6 +84,7 @@ export interface CreatureSnapshot {
   creature_type: number;
   state: number;
   health: number;
+  max_health: number;
   food: number;
   player_id: number;
   message: string;
@@ -189,6 +190,13 @@ export const api = {
   // Game
   gameStatus: (): Promise<{ running: boolean }> =>
     fetch(`${BASE_URL}/api/game/status`).then(r => handleResponse<{ running: boolean }>(r)),
+
+  startGame: (players: { bot_version_id: number; name?: string }[]): Promise<{ status: string; message: string }> =>
+    fetch(`${BASE_URL}/api/game/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ players }),
+    }).then(r => handleResponse<{ status: string; message: string }>(r)),
 
   stopGame: (): Promise<void> =>
     fetch(`${BASE_URL}/api/game/stop`, { method: 'POST' }).then(r => {

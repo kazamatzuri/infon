@@ -1,7 +1,7 @@
 // Game server: manages a running game instance and broadcasts state to WebSocket clients.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -40,6 +40,8 @@ pub struct PlayerEntry {
 pub struct GameServer {
     broadcast_tx: broadcast::Sender<String>,
     running: Arc<AtomicBool>,
+    /// Cached world JSON so late-joining WS clients get the world state.
+    world_json: Arc<Mutex<Option<String>>>,
 }
 
 impl GameServer {
@@ -48,12 +50,18 @@ impl GameServer {
         Self {
             broadcast_tx: tx,
             running: Arc::new(AtomicBool::new(false)),
+            world_json: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Subscribe to game messages. Returns a receiver that yields JSON strings.
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.broadcast_tx.subscribe()
+    }
+
+    /// Get the cached world JSON for late-joining clients.
+    pub fn world_json(&self) -> Option<String> {
+        self.world_json.lock().unwrap().clone()
     }
 
     /// Whether a game is currently running.
@@ -82,6 +90,7 @@ impl GameServer {
 
         let tx = self.broadcast_tx.clone();
         let running = self.running.clone();
+        let world_json = self.world_json.clone();
         let max_ticks = max_ticks.unwrap_or(6000);
 
         running.store(true, Ordering::Relaxed);
@@ -115,10 +124,11 @@ impl GameServer {
                 }
             }
 
-            // Send initial world snapshot
+            // Send initial world snapshot and cache it for late joiners
             let world_snap = game.world_snapshot();
             let world_msg = GameMessage::WorldInit(world_snap);
             if let Ok(json) = serde_json::to_string(&world_msg) {
+                *world_json.lock().unwrap() = Some(json.clone());
                 let _ = tx.send(json);
             }
 
@@ -154,6 +164,7 @@ impl GameServer {
                 let _ = tx.send(json);
             }
 
+            *world_json.lock().unwrap() = None;
             running.store(false, Ordering::Relaxed);
         });
 
