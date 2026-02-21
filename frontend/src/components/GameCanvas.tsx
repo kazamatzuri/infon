@@ -62,6 +62,10 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
   const [gameTime, setGameTime] = useState(0);
   const [connected, setConnected] = useState(false);
   const animFrameRef = useRef<number>(0);
+  const [sidebarTab, setSidebarTab] = useState<'scores' | 'console'>('scores');
+  const consoleLogRef = useRef<Map<number, string[]>>(new Map());
+  const [consoleVersion, setConsoleVersion] = useState(0);
+  const consoleEndRef = useRef<HTMLDivElement>(null);
 
   const spriteSheetRef = useRef<HTMLImageElement | null>(null);
   const spriteLoadedRef = useRef(false);
@@ -264,6 +268,20 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
             snapshotRef.current = msg;
             setPlayers(msg.players || []);
             setGameTime(msg.game_time || 0);
+            // Accumulate player output for console
+            {
+              let hasNew = false;
+              for (const p of (msg.players || [])) {
+                if (p.output && p.output.length > 0) {
+                  const existing = consoleLogRef.current.get(p.id) || [];
+                  const combined = [...existing, ...p.output];
+                  // Cap at 500 lines per player
+                  consoleLogRef.current.set(p.id, combined.slice(-500));
+                  hasNew = true;
+                }
+              }
+              if (hasNew) setConsoleVersion(v => v + 1);
+            }
             break;
           case 'game_end':
             setGameEnd(msg);
@@ -329,41 +347,110 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
         )}
       </div>
 
-      {/* Score panel */}
-      <div style={{ width: '240px', background: '#16213e', borderLeft: '1px solid #333', padding: '16px', overflowY: 'auto' }}>
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Game Time
-          </div>
-          <div style={{ color: '#e0e0e0', fontSize: '24px', fontWeight: 700, fontFamily: 'monospace' }}>
-            {Math.floor(gameTime / 1000)}s
-          </div>
+      {/* Sidebar panel */}
+      <div style={{ width: '240px', background: '#16213e', borderLeft: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
+        {/* Tab strip */}
+        <div style={{ display: 'flex', borderBottom: '1px solid #333' }}>
+          {(['scores', 'console'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setSidebarTab(tab)}
+              style={{
+                flex: 1, padding: '8px', border: 'none', cursor: 'pointer',
+                background: sidebarTab === tab ? '#16213e' : '#0a0a1a',
+                color: sidebarTab === tab ? '#e0e0e0' : '#666',
+                fontWeight: sidebarTab === tab ? 600 : 400,
+                fontSize: '13px', textTransform: 'capitalize',
+                borderBottom: sidebarTab === tab ? '2px solid #f5a623' : '2px solid transparent',
+              }}
+            >
+              {tab}
+            </button>
+          ))}
         </div>
 
-        <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-          Players
-        </div>
-        {players.length === 0 ? (
-          <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
-        ) : (
-          players
-            .sort((a, b) => b.score - a.score)
-            .map(p => (
-              <div key={p.id} style={{
-                padding: '8px',
-                marginBottom: '8px',
-                background: '#0a0a1a',
-                borderRadius: '6px',
-                borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
-              }}>
-                <div style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                  <span style={{ color: '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
-                  <span style={{ color: '#888', fontSize: '13px' }}>{p.num_creatures} units</span>
+        {/* Tab content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+          {sidebarTab === 'scores' ? (
+            <>
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Game Time
+                </div>
+                <div style={{ color: '#e0e0e0', fontSize: '24px', fontWeight: 700, fontFamily: 'monospace' }}>
+                  {Math.floor(gameTime / 1000)}s
                 </div>
               </div>
-            ))
-        )}
+
+              <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
+                Players
+              </div>
+              {players.length === 0 ? (
+                <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
+              ) : (
+                players
+                  .sort((a, b) => b.score - a.score)
+                  .map(p => (
+                    <div key={p.id} style={{
+                      padding: '8px',
+                      marginBottom: '8px',
+                      background: '#0a0a1a',
+                      borderRadius: '6px',
+                      borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{
+                          display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
+                          background: PLAYER_COLORS[p.id % PLAYER_COLORS.length],
+                        }} />
+                        <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                        <span style={{ color: '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
+                        <span style={{ color: '#888', fontSize: '13px' }}>{p.num_creatures} units</span>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </>
+          ) : (
+            // Console tab
+            <div key={consoleVersion}>
+              {players.length === 0 ? (
+                <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
+              ) : (
+                players.map(p => {
+                  const lines = consoleLogRef.current.get(p.id) || [];
+                  return (
+                    <div key={p.id} style={{ marginBottom: '12px' }}>
+                      <div style={{
+                        color: PLAYER_COLORS[p.id % PLAYER_COLORS.length],
+                        fontWeight: 600, fontSize: '12px', marginBottom: '4px',
+                      }}>
+                        {p.name}
+                      </div>
+                      <div style={{
+                        background: '#0a0a1a', borderRadius: '4px', padding: '6px',
+                        fontFamily: 'monospace', fontSize: '11px', maxHeight: '150px',
+                        overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                      }}>
+                        {lines.length === 0 ? (
+                          <span style={{ color: '#444' }}>No output</span>
+                        ) : (
+                          lines.map((line, i) => (
+                            <div key={i} style={{ color: line.startsWith('Lua error') ? '#e94560' : '#aaa' }}>
+                              {line}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

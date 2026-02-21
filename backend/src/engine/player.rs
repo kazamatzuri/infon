@@ -1,5 +1,6 @@
 use mlua::Lua;
 
+use super::config::LUA_MAX_INSTRUCTIONS;
 use super::lua_api;
 
 /// Represents a player controlling a swarm of creatures.
@@ -16,10 +17,14 @@ pub struct Player {
 
 impl Player {
     /// Create a new player with a fresh Lua VM.
-    /// Registers all API functions and constants, loads the high-level API (oo or state),
-    /// then loads the user's bot code.
-    pub fn new(id: u32, name: &str, code: &str, api_type: &str) -> Result<Self, String> {
-        let lua = Lua::new();
+    /// Registers all API functions and constants, loads the high-level API (oo or state).
+    /// Bot code is NOT loaded here — call `load_code()` after setting game state
+    /// so that top-level bot code can call API functions like `world_size()`.
+    pub fn new(id: u32, name: &str, api_type: &str) -> Result<Self, String> {
+        // SAFETY: We need the debug library for debug.sethook to set instruction
+        // limits on coroutine threads. The debug global is removed in the bootstrap
+        // after saving a reference to debug.sethook, so user code cannot access it.
+        let lua = unsafe { Lua::unsafe_new() };
 
         // Register constants and API functions
         lua_api::register_constants(&lua, id)
@@ -97,6 +102,24 @@ function onCommand(cmd)
     print("huh? use '?' for help")
 end
 
+-- Instruction limit for coroutines: Lua 5.1 hooks are per-thread,
+-- so we wrap coroutine.resume to install the hook on each coroutine.
+do
+    local _sethook = debug.sethook
+    local _resume = coroutine.resume
+    local _instruction_limit = {LUA_MAX_INSTRUCTIONS}
+    coroutine.resume = function(co, ...)
+        _sethook(co, function() error("lua vm cycles exceeded") end, "", _instruction_limit)
+        local results = {{_resume(co, ...)}}
+        _sethook(co)
+        -- If resume failed with cycles exceeded, print so it appears in output
+        if not results[1] and type(results[2]) == "string" and results[2]:find("cycles exceeded") then
+            print("Lua error: " .. results[2])
+        end
+        return unpack(results)
+    end
+end
+
 -- Disable dangerous functions for sandbox
 debug = nil
 load = nil
@@ -132,19 +155,10 @@ collectgarbage = nil
             _ => "",
         };
         if !default_code.is_empty() {
-            // For state API, the default code defines a `bot` function that setupCreature uses
             lua.load(default_code)
                 .set_name(&format!("api/{api_type}-default.lua"))
                 .exec()
                 .map_err(|e| format!("Failed to load {api_type} defaults: {e}"))?;
-        }
-
-        // Load user bot code
-        if !code.is_empty() {
-            lua.load(code)
-                .set_name("user_bot")
-                .exec()
-                .map_err(|e| format!("Failed to load bot code: {e}"))?;
         }
 
         Ok(Player {
@@ -158,6 +172,20 @@ collectgarbage = nil
             output: Vec::new(),
         })
     }
+
+    /// Load user bot code into the Lua VM.
+    /// Game state must be set in app_data before calling this, so top-level
+    /// bot code (e.g. `world_size()` calls) can access the game world.
+    pub fn load_code(&self, code: &str) -> Result<(), String> {
+        if !code.is_empty() {
+            self.lua
+                .load(code)
+                .set_name("user_bot")
+                .exec()
+                .map_err(|e| format!("Failed to load bot code: {e}"))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -166,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_create_player() {
-        let player = Player::new(1, "TestBot", "", "oo");
+        let player = Player::new(1, "TestBot", "oo");
         assert!(player.is_ok());
         let player = player.unwrap();
         assert_eq!(player.id, 1);
@@ -177,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_create_player_state_api() {
-        let player = Player::new(2, "StateBot", "", "state");
+        let player = Player::new(2, "StateBot", "state");
         assert!(player.is_ok());
         let player = player.unwrap();
         assert_eq!(player.api_type, "state");
@@ -185,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_player_lua_constants() {
-        let player = Player::new(1, "TestBot", "", "oo").unwrap();
+        let player = Player::new(1, "TestBot", "oo").unwrap();
         let lua = &player.lua;
 
         // Check creature type constants
@@ -227,13 +255,13 @@ mod tests {
 
     #[test]
     fn test_create_player_invalid_api() {
-        let result = Player::new(1, "Bad", "", "invalid");
+        let result = Player::new(1, "Bad", "invalid");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_player_think_exists() {
-        let player = Player::new(1, "TestBot", "", "oo").unwrap();
+        let player = Player::new(1, "TestBot", "oo").unwrap();
         let lua = &player.lua;
         let _func: mlua::Function = lua.globals().get("player_think").unwrap();
         // If we got here without error, the function exists and is a Function type

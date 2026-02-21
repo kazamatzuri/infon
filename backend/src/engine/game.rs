@@ -43,6 +43,7 @@ pub struct PlayerSnapshot {
     pub score: i32,
     pub color: u8,
     pub num_creatures: i32,
+    pub output: Vec<String>,
 }
 
 /// Snapshot of a tile for rendering / API consumers.
@@ -113,8 +114,47 @@ impl Game {
         let player_id = self.next_player_id;
         self.next_player_id += 1;
 
-        let player = Player::new(player_id, name, code, api_type)?;
+        let player = Player::new(player_id, name, api_type)?;
+
+        // Set game state so top-level bot code can call API functions
+        // (e.g. world_size(), get_koth_pos() during script initialization)
+        let print_output = Rc::new(RefCell::new(Vec::new()));
+        let gs = Rc::new(RefCell::new(lua_api::LuaGameState {
+            world: self.world.clone(),
+            creatures: self.creatures.clone(),
+            game_time: self.game_time,
+            player_id,
+            player_scores: self.player_scores.clone(),
+            player_names: self.player_names.clone(),
+            king_player_id: self.king_player_id,
+            print_output: print_output.clone(),
+        }));
+        lua_api::set_game_state(&player.lua, gs);
+
+        let load_result = player.load_code(code);
+
+        lua_api::clear_game_state(&player.lua);
+
+        // Collect any print output from loading
+        {
+            let output = print_output.borrow();
+            // Can't mutate player yet since we need to insert it first
+            // We'll store output after insert
+            drop(output);
+        }
+
+        load_result?;
+
         self.players.insert(player_id, player);
+
+        // Collect load-time print output
+        {
+            let output = print_output.borrow();
+            if let Some(p) = self.players.get_mut(&player_id) {
+                p.output.extend(output.iter().cloned());
+            }
+        }
+
         self.player_scores.borrow_mut().insert(player_id, 0);
         self.player_names
             .borrow_mut()
@@ -286,6 +326,14 @@ impl Game {
 
             lua_api::set_game_state(&player.lua, gs);
 
+            // Set instruction count limit to prevent infinite loops
+            let _ = player.lua.set_hook(
+                mlua::HookTriggers::new().every_nth_instruction(LUA_MAX_INSTRUCTIONS),
+                |_lua, _debug| {
+                    Err(mlua::Error::RuntimeError("lua vm cycles exceeded".into()))
+                },
+            );
+
             // Build the events table in Lua
             let result = (|| -> mlua::Result<()> {
                 let lua = &player.lua;
@@ -323,12 +371,16 @@ impl Game {
                 Ok(())
             })();
 
+            // Remove instruction hook after execution
+            player.lua.remove_hook();
+
             if let Err(e) = result {
                 // Log the error but don't crash the game
+                tracing::warn!(player_id = pid, "Lua error in player_think: {e}");
                 let player = self.players.get_mut(&pid).unwrap();
                 player
                     .output
-                    .push(format!("Lua error in player_think: {e}"));
+                    .push(format!("Lua error: {e}"));
             }
 
             lua_api::clear_game_state(&self.players.get(&pid).unwrap().lua);
@@ -629,8 +681,29 @@ impl Game {
         }
     }
 
+    /// Check if only one player has creatures remaining (win condition).
+    /// Returns Some(player_id) if exactly one player has creatures, None otherwise.
+    /// Also returns None if no players have creatures at all.
+    pub fn check_winner(&self) -> Option<u32> {
+        let creatures = self.creatures.borrow();
+        let mut player_with_creatures: Option<u32> = None;
+        for c in creatures.values() {
+            match player_with_creatures {
+                None => player_with_creatures = Some(c.player_id),
+                Some(pid) if pid != c.player_id => return None, // multiple players alive
+                _ => {}
+            }
+        }
+        // Only return a winner if there are actually creatures (and more than 1 player in the game)
+        if player_with_creatures.is_some() && self.players.len() > 1 {
+            player_with_creatures
+        } else {
+            None
+        }
+    }
+
     /// Create a snapshot of the game state for rendering.
-    pub fn snapshot(&self) -> GameSnapshot {
+    pub fn snapshot(&mut self) -> GameSnapshot {
         let creatures = self.creatures.borrow();
         let creature_snapshots: Vec<CreatureSnapshot> = creatures
             .values()
@@ -651,13 +724,14 @@ impl Game {
 
         let player_snapshots: Vec<PlayerSnapshot> = self
             .players
-            .values()
+            .values_mut()
             .map(|p| PlayerSnapshot {
                 id: p.id,
                 name: p.name.clone(),
                 score: p.score,
                 color: p.color,
                 num_creatures: p.num_creatures,
+                output: std::mem::take(&mut p.output),
             })
             .collect();
 
@@ -924,5 +998,101 @@ mod tests {
         assert_eq!(snap.game_time, 0);
         assert_eq!(snap.creatures.len(), 1);
         assert_eq!(snap.creatures[0].x, cx);
+    }
+
+    #[test]
+    fn test_check_winner_no_winner() {
+        let world = make_test_world();
+        let mut game = Game::new(world);
+        let pid1 = game.add_player("Bot1", "", "oo").unwrap();
+        let pid2 = game.add_player("Bot2", "", "oo").unwrap();
+
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid1, cx, cy, CREATURE_SMALL);
+        game.spawn_creature(pid2, cx + 256, cy, CREATURE_SMALL);
+
+        // Both players have creatures — no winner
+        assert_eq!(game.check_winner(), None);
+    }
+
+    #[test]
+    fn test_check_winner_one_player_left() {
+        let world = make_test_world();
+        let mut game = Game::new(world);
+        let pid1 = game.add_player("Bot1", "", "oo").unwrap();
+        let _pid2 = game.add_player("Bot2", "", "oo").unwrap();
+
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid1, cx, cy, CREATURE_SMALL);
+        // pid2 has no creatures
+
+        assert_eq!(game.check_winner(), Some(pid1));
+    }
+
+    #[test]
+    fn test_check_winner_single_player_no_win() {
+        let world = make_test_world();
+        let mut game = Game::new(world);
+        let pid1 = game.add_player("Bot1", "", "oo").unwrap();
+
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid1, cx, cy, CREATURE_SMALL);
+
+        // Only 1 player in game — no win condition
+        assert_eq!(game.check_winner(), None);
+    }
+
+    #[test]
+    fn test_instruction_limit_infinite_loop() {
+        let world = make_test_world();
+        let mut game = Game::new(world);
+
+        // Bot with an infinite loop in main()
+        let code = r#"
+            function Creature:main()
+                while true do end
+            end
+        "#;
+        let pid = game.add_player("InfiniteBot", code, "oo").unwrap();
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
+
+        // This should NOT hang — the instruction limit should catch it
+        game.tick();
+        assert_eq!(game.game_time, 100);
+
+        // Error should appear in player output
+        let snap = game.snapshot();
+        let player = snap.players.iter().find(|p| p.id == pid).unwrap();
+        let has_error = player.output.iter().any(|line| line.contains("cycles exceeded"));
+        assert!(has_error, "Expected 'cycles exceeded' error in output, got: {:?}", player.output);
+    }
+
+    #[test]
+    fn test_instruction_limit_loop_in_onspawned() {
+        let world = make_test_world();
+        let mut game = Game::new(world);
+
+        // Bot with an infinite loop at load time / onSpawned
+        let code = r#"
+            function Creature:onSpawned()
+                while true do end
+            end
+            function Creature:main()
+                self:wait_for_next_round()
+            end
+        "#;
+        let pid = game.add_player("SpawnLoopBot", code, "oo").unwrap();
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
+
+        // Should not hang
+        game.tick();
+        assert_eq!(game.game_time, 100);
     }
 }

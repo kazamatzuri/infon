@@ -97,6 +97,7 @@ export interface PlayerSnapshot {
   score: number;
   color: number;
   num_creatures: number;
+  output?: string[];
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {

@@ -102,3 +102,6 @@ pub const FEED_DISTANCE: [i32; CREATURE_TYPES] = [256, 0, 256, 0];
 
 // Feed speed (food transferred per second)
 pub const FEED_SPEED: [i32; CREATURE_TYPES] = [400, 0, 400, 0];
+
+// Lua VM instruction limit per tick (prevents infinite loops)
+pub const LUA_MAX_INSTRUCTIONS: u32 = 500_000;

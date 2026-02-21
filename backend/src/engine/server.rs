@@ -1,5 +1,6 @@
 // Game server: manages a running game instance and broadcasts state to WebSocket clients.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -96,72 +97,95 @@ impl GameServer {
         running.store(true, Ordering::Relaxed);
 
         std::thread::spawn(move || {
-            let mut game = Game::new(world);
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut game = Game::new(world);
 
-            // Add players and spawn initial creatures
-            let mut player_ids = Vec::new();
-            for entry in &players {
-                match game.add_player(&entry.name, &entry.code, &entry.api_type) {
-                    Ok(pid) => {
-                        player_ids.push(pid);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to add player '{}': {}", entry.name, e);
-                    }
-                }
-            }
-
-            // Spawn initial creatures for each player on random walkable tiles
-            for &pid in &player_ids {
-                let initial_creatures = 2;
-                for _ in 0..initial_creatures {
-                    let tile = game.world.borrow().find_plain_tile();
-                    if let Some((tx_pos, ty_pos)) = tile {
-                        let cx = World::tile_center(tx_pos);
-                        let cy = World::tile_center(ty_pos);
-                        game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
+                // Add players and spawn initial creatures
+                let mut player_ids = Vec::new();
+                for entry in &players {
+                    match game.add_player(&entry.name, &entry.code, &entry.api_type) {
+                        Ok(pid) => {
+                            player_ids.push(pid);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to add player '{}': {}", entry.name, e);
+                        }
                     }
                 }
-            }
 
-            // Send initial world snapshot and cache it for late joiners
-            let world_snap = game.world_snapshot();
-            let world_msg = GameMessage::WorldInit(world_snap);
-            if let Ok(json) = serde_json::to_string(&world_msg) {
-                *world_json.lock().unwrap() = Some(json.clone());
-                let _ = tx.send(json);
-            }
+                // Spawn initial creatures for each player on random walkable tiles
+                for &pid in &player_ids {
+                    let initial_creatures = 2;
+                    for _ in 0..initial_creatures {
+                        let tile = game.world.borrow().find_plain_tile();
+                        if let Some((tx_pos, ty_pos)) = tile {
+                            let cx = World::tile_center(tx_pos);
+                            let cy = World::tile_center(ty_pos);
+                            game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
+                        }
+                    }
+                }
 
-            // Game loop
-            let mut tick_count: u64 = 0;
-            while running.load(Ordering::Relaxed) && tick_count < max_ticks {
-                game.tick();
-                tick_count += 1;
-
-                let snapshot = game.snapshot();
-                let msg = GameMessage::Snapshot(snapshot);
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    // If send fails, there are no receivers -- that is fine, keep running
+                // Send initial world snapshot and cache it for late joiners
+                let world_snap = game.world_snapshot();
+                let world_msg = GameMessage::WorldInit(world_snap);
+                if let Ok(json) = serde_json::to_string(&world_msg) {
+                    *world_json.lock().unwrap() = Some(json.clone());
                     let _ = tx.send(json);
                 }
 
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+                // Game loop
+                let mut tick_count: u64 = 0;
+                let mut winner: Option<u32> = None;
+                while running.load(Ordering::Relaxed) && tick_count < max_ticks {
+                    game.tick();
+                    tick_count += 1;
 
-            // Game ended -- send final scores
-            let final_snap = game.snapshot();
-            let winner = final_snap
-                .players
-                .iter()
-                .max_by_key(|p| p.score)
-                .map(|p| p.id);
+                    let snapshot = game.snapshot();
+                    let msg = GameMessage::Snapshot(snapshot);
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        // If send fails, there are no receivers -- that is fine, keep running
+                        let _ = tx.send(json);
+                    }
 
-            let end_msg = GameMessage::GameEnd {
-                winner,
-                final_scores: final_snap.players,
-            };
-            if let Ok(json) = serde_json::to_string(&end_msg) {
-                let _ = tx.send(json);
+                    // Check win condition: only one player has creatures left
+                    if let Some(w) = game.check_winner() {
+                        tracing::info!(player_id = w, "Player won — last one standing");
+                        winner = Some(w);
+                        break;
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+
+                // Game ended -- send final scores
+                let final_snap = game.snapshot();
+                let winner = winner.or_else(|| {
+                    final_snap
+                        .players
+                        .iter()
+                        .max_by_key(|p| p.score)
+                        .map(|p| p.id)
+                });
+
+                let end_msg = GameMessage::GameEnd {
+                    winner,
+                    final_scores: final_snap.players,
+                };
+                if let Ok(json) = serde_json::to_string(&end_msg) {
+                    let _ = tx.send(json);
+                }
+            }));
+
+            if let Err(panic_info) = result {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!("Game thread panicked: {}", msg);
             }
 
             *world_json.lock().unwrap() = None;
@@ -234,6 +258,7 @@ mod tests {
                 score: 42,
                 color: 0,
                 num_creatures: 3,
+                output: vec![],
             }],
             king_player_id: Some(1),
         };

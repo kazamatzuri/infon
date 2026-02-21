@@ -59,7 +59,8 @@ export function GameViewer() {
   };
 
   const handleBotSelect = async (index: number, botId: number) => {
-    updateSlot(index, { botId, versionId: null });
+    const bot = bots.find(b => b.id === botId);
+    updateSlot(index, { botId, versionId: null, name: bot?.name || `Player ${index + 1}` });
     await loadVersions(botId);
     // Auto-select latest version
     const v = versions[botId];
