@@ -7,6 +7,8 @@ use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 
+use engine::server::GameServer;
+
 async fn health_check() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "infon-backend" }))
 }
@@ -20,9 +22,11 @@ async fn main() {
         .expect("Failed to initialize database");
     let db = Arc::new(db);
 
+    let game_server = Arc::new(GameServer::new());
+
     let app = Router::new()
         .route("/health", get(health_check))
-        .merge(api::router(db))
+        .merge(api::router(db, game_server))
         .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")

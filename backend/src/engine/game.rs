@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use serde::Serialize;
+
 use super::config::*;
 use super::creature::Creature;
 use super::lua_api::{self, LuaGameState};
@@ -17,8 +19,8 @@ pub enum GameEvent {
     PlayerCreated { player_id: u32 },
 }
 
-/// Snapshot of game state for rendering / API consumers.
-#[derive(Clone, Debug)]
+/// Snapshot of a creature for rendering / API consumers.
+#[derive(Clone, Debug, Serialize)]
 pub struct CreatureSnapshot {
     pub id: u32,
     pub x: i32,
@@ -30,13 +32,45 @@ pub struct CreatureSnapshot {
     pub state: u8,
     pub player_id: u32,
     pub message: String,
+    pub target_id: Option<u32>,
 }
 
-#[derive(Clone, Debug)]
+/// Snapshot of a player for rendering / API consumers.
+#[derive(Clone, Debug, Serialize)]
+pub struct PlayerSnapshot {
+    pub id: u32,
+    pub name: String,
+    pub score: i32,
+    pub color: u8,
+    pub num_creatures: i32,
+}
+
+/// Snapshot of a tile for rendering / API consumers.
+#[derive(Clone, Debug, Serialize)]
+pub struct TileSnapshot {
+    pub x: usize,
+    pub y: usize,
+    pub food: i32,
+    pub tile_type: u8,
+    pub gfx: u8,
+}
+
+/// Full world snapshot sent on initial connection.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorldSnapshot {
+    pub width: usize,
+    pub height: usize,
+    pub koth_x: usize,
+    pub koth_y: usize,
+    pub tiles: Vec<TileSnapshot>,
+}
+
+/// Snapshot of the full game state for one tick.
+#[derive(Clone, Debug, Serialize)]
 pub struct GameSnapshot {
     pub game_time: i64,
     pub creatures: Vec<CreatureSnapshot>,
-    pub player_scores: HashMap<u32, i32>,
+    pub players: Vec<PlayerSnapshot>,
     pub king_player_id: Option<u32>,
 }
 
@@ -611,14 +645,51 @@ impl Game {
                 state: c.state,
                 player_id: c.player_id,
                 message: c.message.clone(),
+                target_id: c.target_id,
+            })
+            .collect();
+
+        let player_snapshots: Vec<PlayerSnapshot> = self
+            .players
+            .values()
+            .map(|p| PlayerSnapshot {
+                id: p.id,
+                name: p.name.clone(),
+                score: p.score,
+                color: p.color,
+                num_creatures: p.num_creatures,
             })
             .collect();
 
         GameSnapshot {
             game_time: self.game_time,
             creatures: creature_snapshots,
-            player_scores: self.player_scores.borrow().clone(),
+            players: player_snapshots,
             king_player_id: self.king_player_id,
+        }
+    }
+
+    /// Create a snapshot of the world (tiles) for initial WebSocket handshake.
+    pub fn world_snapshot(&self) -> WorldSnapshot {
+        let world = self.world.borrow();
+        let mut tiles = Vec::with_capacity(world.width * world.height);
+        for y in 0..world.height {
+            for x in 0..world.width {
+                tiles.push(TileSnapshot {
+                    x,
+                    y,
+                    food: world.get_food(x, y),
+                    tile_type: world.get_type(x, y),
+                    gfx: world.get_gfx(x, y),
+                });
+            }
+        }
+        WorldSnapshot {
+            width: world.width,
+            height: world.height,
+            koth_x: world.koth_x,
+            koth_y: world.koth_y,
+            tiles,
         }
     }
 }

@@ -264,6 +264,20 @@ impl Database {
         Ok(row)
     }
 
+    /// Get a bot version by its ID alone (without needing bot_id).
+    pub async fn get_bot_version_by_id(
+        &self,
+        version_id: i64,
+    ) -> Result<Option<BotVersion>, sqlx::Error> {
+        let row = sqlx::query_as::<_, BotVersion>(
+            "SELECT id, bot_id, version, code, api_type, created_at FROM bot_versions WHERE id = ?",
+        )
+        .bind(version_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     // ── Tournament CRUD ───────────────────────────────────────────────
 
     pub async fn create_tournament(
