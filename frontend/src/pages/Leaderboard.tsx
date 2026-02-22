@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { LeaderboardEntry } from '../api/client';
 
@@ -7,6 +8,7 @@ type Tab = '1v1' | 'ffa' | '2v2';
 const PAGE_SIZE = 50;
 
 export function Leaderboard() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('1v1');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,6 +99,7 @@ export function Leaderboard() {
                 <th style={{ ...thStyle, textAlign: 'right' }}>Games</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>W / L</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Win Rate</th>
+                <th style={{ ...thStyle, textAlign: 'center' }}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -119,6 +122,14 @@ export function Leaderboard() {
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {(e.win_rate * 100).toFixed(1)}%
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'center' }}>
+                    <button
+                      onClick={() => navigate(`/challenge?opponent=${e.bot_version_id}`)}
+                      style={challengeBtn}
+                    >
+                      Challenge
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -164,6 +175,17 @@ const thStyle: React.CSSProperties = {
 const tdStyle: React.CSSProperties = {
   padding: '10px 12px',
   color: '#e0e0e0',
+};
+
+const challengeBtn: React.CSSProperties = {
+  padding: '4px 12px',
+  background: '#16c79a',
+  color: '#fff',
+  border: 'none',
+  borderRadius: 4,
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
 };
 
 const paginationBtn: React.CSSProperties = {

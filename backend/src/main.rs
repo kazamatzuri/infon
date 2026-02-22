@@ -10,7 +10,7 @@ mod replay;
 mod tournament;
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde_json::{json, Value};
@@ -58,6 +58,7 @@ async fn main() {
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/me", get(auth::me))
+        .route("/api/auth/profile", put(auth::update_profile))
         .with_state(db.clone())
         .merge(api::router(db, game_server, rate_limiter, game_queue))
         .layer(CorsLayer::permissive())

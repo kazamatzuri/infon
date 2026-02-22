@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Navigate } from 'react-router-dom';
+import { api } from '../api/client';
 
 interface ApiKey {
   id: number;
@@ -19,7 +20,7 @@ const AVAILABLE_SCOPES = [
 ];
 
 export function ApiKeys() {
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -38,20 +39,15 @@ export function ApiKeys() {
   const [copied, setCopied] = useState(false);
 
   const fetchKeys = useCallback(async () => {
-    if (!token) return;
     try {
-      const res = await fetch('/api/api-keys', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        setKeys(await res.json());
-      }
+      const data = await api.listApiKeys();
+      setKeys(data);
     } catch {
       setError('Failed to load API keys');
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     fetchKeys();
@@ -69,28 +65,13 @@ export function ApiKeys() {
     setNewToken(null);
 
     try {
-      const res = await fetch('/api/api-keys', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: newName.trim(),
-          scopes: selectedScopes.join(','),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Failed to create key');
-        return;
-      }
+      const data = await api.createApiKey(newName.trim(), selectedScopes.join(','));
       setNewToken(data.token);
       setNewName('');
       setCopied(false);
       fetchKeys();
-    } catch {
-      setError('Network error');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create key');
     } finally {
       setCreating(false);
     }
@@ -99,13 +80,8 @@ export function ApiKeys() {
   const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to revoke this API key?')) return;
     try {
-      const res = await fetch(`/api/api-keys/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok || res.status === 204) {
-        setKeys(keys.filter(k => k.id !== id));
-      }
+      await api.deleteApiKey(id);
+      setKeys(keys.filter(k => k.id !== id));
     } catch {
       setError('Failed to delete key');
     }

@@ -10,6 +10,14 @@ use super::lua_api::{self, LuaGameState};
 use super::player::Player;
 use super::world::World;
 
+/// Per-player game statistics tracked during gameplay.
+#[derive(Debug, Default, Clone)]
+pub struct PlayerStats {
+    pub creatures_spawned: i32,
+    pub creatures_killed: i32,
+    pub creatures_lost: i32,
+}
+
 /// Events that get passed to player_think Lua function.
 #[derive(Clone, Debug)]
 pub enum GameEvent {
@@ -89,6 +97,8 @@ pub struct Game {
     pub player_names: Rc<RefCell<HashMap<u32, String>>>,
     /// Pending events per player (player_id -> events)
     pending_events: HashMap<u32, Vec<GameEvent>>,
+    /// Per-player statistics (spawns, kills, losses)
+    player_stats: HashMap<u32, PlayerStats>,
 }
 
 impl Game {
@@ -105,6 +115,7 @@ impl Game {
             player_scores: Rc::new(RefCell::new(HashMap::new())),
             player_names: Rc::new(RefCell::new(HashMap::new())),
             pending_events: HashMap::new(),
+            player_stats: HashMap::new(),
         }
     }
 
@@ -176,6 +187,7 @@ impl Game {
         self.player_scores.borrow_mut().remove(&player_id);
         self.player_names.borrow_mut().remove(&player_id);
         self.pending_events.remove(&player_id);
+        self.player_stats.remove(&player_id);
 
         // Kill all creatures belonging to this player
         let to_kill: Vec<u32> = self
@@ -188,6 +200,14 @@ impl Game {
         for id in to_kill {
             self.creatures.borrow_mut().remove(&id);
         }
+    }
+
+    /// Get the stats for a player. Returns default (all zeros) if not found.
+    pub fn player_stats(&self, player_id: u32) -> PlayerStats {
+        self.player_stats
+            .get(&player_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Spawn a creature for a player at the given pixel position.
@@ -213,6 +233,12 @@ impl Game {
         if let Some(player) = self.players.get_mut(&player_id) {
             player.num_creatures += 1;
         }
+
+        // Track spawn stat
+        self.player_stats
+            .entry(player_id)
+            .or_default()
+            .creatures_spawned += 1;
 
         // Queue spawn event for the owning player
         self.pending_events
@@ -242,6 +268,12 @@ impl Game {
             player.num_creatures += 1;
         }
 
+        // Track spawn stat
+        self.player_stats
+            .entry(player_id)
+            .or_default()
+            .creatures_spawned += 1;
+
         self.pending_events
             .entry(player_id)
             .or_default()
@@ -261,6 +293,22 @@ impl Game {
             .get(&creature_id)
             .map(|c| (c.player_id, c.id));
         if let Some((player_id, _)) = creature {
+            // Track creatures_lost for the owner
+            self.player_stats
+                .entry(player_id)
+                .or_default()
+                .creatures_lost += 1;
+
+            // Track creatures_killed for the killer (if it's a different player)
+            if let Some(kid) = killer_id {
+                let killer_player_id = self.creatures.borrow().get(&kid).map(|c| c.player_id);
+                if let Some(kpid) = killer_player_id {
+                    if kpid != player_id {
+                        self.player_stats.entry(kpid).or_default().creatures_killed += 1;
+                    }
+                }
+            }
+
             self.pending_events
                 .entry(player_id)
                 .or_default()

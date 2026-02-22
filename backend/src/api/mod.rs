@@ -248,8 +248,28 @@ pub fn router(
 
 // ── Bot handlers ──────────────────────────────────────────────────────
 
-async fn list_bots(State(state): State<AppState>) -> impl IntoResponse {
-    match state.db.list_bots().await {
+#[derive(Deserialize)]
+pub struct ListBotsParams {
+    pub all: Option<bool>,
+}
+
+async fn list_bots(
+    State(state): State<AppState>,
+    auth: OptionalAuthUser,
+    Query(params): Query<ListBotsParams>,
+) -> impl IntoResponse {
+    let show_all = params.all.unwrap_or(false);
+    let result = if !show_all {
+        if let Some(claims) = auth.0 {
+            state.db.list_bots_by_owner(claims.sub).await
+        } else {
+            state.db.list_bots().await
+        }
+    } else {
+        state.db.list_bots().await
+    };
+
+    match result {
         Ok(bots) => (StatusCode::OK, Json(json!(bots))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }

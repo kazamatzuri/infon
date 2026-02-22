@@ -9,6 +9,7 @@ import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Leaderboard } from './pages/Leaderboard';
 import { ApiKeys } from './pages/ApiKeys';
+import { Challenge } from './pages/Challenge';
 import { Teams } from './pages/Teams';
 import { MatchDetail } from './pages/MatchDetail';
 import './App.css';
@@ -27,6 +28,7 @@ function NavBar() {
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         {user ? (
           <>
+            <NavLink to="/challenge" className={navLinkClass}>Challenge</NavLink>
             <NavLink to="/teams" className={navLinkClass}>Teams</NavLink>
             <NavLink to="/api-keys" className={navLinkClass}>API Keys</NavLink>
             <span style={{ color: '#aaa', fontSize: 14 }}>{user.username}</span>
@@ -62,6 +64,7 @@ function App() {
               <Route path="/game" element={<GameViewer />} />
               <Route path="/teams" element={<Teams />} />
               <Route path="/matches/:id" element={<MatchDetail />} />
+              <Route path="/challenge" element={<Challenge />} />
               <Route path="/api-keys" element={<ApiKeys />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />

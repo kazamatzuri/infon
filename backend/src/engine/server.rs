@@ -298,13 +298,17 @@ impl GameServer {
                         .players
                         .iter()
                         .enumerate()
-                        .map(|(i, ps)| PlayerScore {
-                            player_index: i,
-                            bot_version_id: bot_version_ids.get(i).copied().unwrap_or(0),
-                            score: ps.score,
-                            creatures_spawned: 0,
-                            creatures_killed: 0,
-                            creatures_lost: 0,
+                        .map(|(i, ps)| {
+                            let pid = player_ids.get(i).copied().unwrap_or(0);
+                            let stats = game.player_stats(pid);
+                            PlayerScore {
+                                player_index: i,
+                                bot_version_id: bot_version_ids.get(i).copied().unwrap_or(0),
+                                score: ps.score,
+                                creatures_spawned: stats.creatures_spawned,
+                                creatures_killed: stats.creatures_killed,
+                                creatures_lost: stats.creatures_lost,
+                            }
                         })
                         .collect();
 

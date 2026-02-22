@@ -412,6 +412,49 @@ pub async fn login(
         .into_response()
 }
 
+#[derive(Deserialize)]
+pub struct UpdateProfileRequest {
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+}
+
+pub async fn update_profile(
+    AuthUser(claims): AuthUser,
+    State(db): State<Arc<Database>>,
+    Json(req): Json<UpdateProfileRequest>,
+) -> impl IntoResponse {
+    match db
+        .update_user(claims.sub, req.display_name.as_deref(), req.bio.as_deref())
+        .await
+    {
+        Ok(Some(user)) => (
+            StatusCode::OK,
+            Json(serde_json::json!(UserPublic {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                display_name: user.display_name,
+                role: user.role,
+                created_at: user.created_at,
+            })),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "User not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("DB error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn me(AuthUser(claims): AuthUser, State(db): State<Arc<Database>>) -> impl IntoResponse {
     match db.get_user(claims.sub).await {
         Ok(Some(user)) => (

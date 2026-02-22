@@ -383,4 +383,37 @@ export const api = {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ bot_version_a: botVersionA, bot_version_b: botVersionB }),
     }).then(r => handleResponse<TeamVersion>(r)),
+
+  // API Keys
+  listApiKeys: (): Promise<any[]> =>
+    fetch(`${BASE_URL}/api/api-keys`, { headers: authHeaders() }).then(r => handleResponse<any[]>(r)),
+
+  createApiKey: (name: string, scopes?: string): Promise<any> =>
+    fetch(`${BASE_URL}/api/api-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name, scopes }),
+    }).then(r => handleResponse<any>(r)),
+
+  deleteApiKey: (id: number): Promise<void> =>
+    fetch(`${BASE_URL}/api/api-keys/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }).then(r => {
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+    }),
+
+  // Challenges
+  createChallenge: (botVersionId: number, opponentBotVersionId: number, options?: { format?: string; headless?: boolean; map?: string }): Promise<any> =>
+    fetch(`${BASE_URL}/api/matches/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        bot_version_id: botVersionId,
+        opponent_bot_version_id: opponentBotVersionId,
+        format: options?.format,
+        headless: options?.headless,
+        map: options?.map,
+      }),
+    }).then(r => handleResponse<any>(r)),
 };
