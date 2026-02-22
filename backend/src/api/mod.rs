@@ -19,6 +19,8 @@ use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::Database;
 use crate::engine::server::{self, GameServer, PlayerEntry};
 use crate::engine::world::World;
+use crate::queue::GameQueue;
+use crate::rate_limit::{RateLimitType, RateLimiter};
 
 // ── Request types ─────────────────────────────────────────────────────
 
@@ -75,6 +77,15 @@ pub struct UpdateBotVersionRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ChallengeRequest {
+    pub bot_version_id: i64,
+    pub opponent_bot_version_id: i64,
+    pub format: Option<String>,
+    pub headless: Option<bool>,
+    pub map: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct PaginationParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -96,6 +107,12 @@ pub struct CreateTeamVersionRequest {
     pub bot_version_b: i64,
 }
 
+#[derive(Deserialize)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+    pub scopes: Option<String>,
+}
+
 // ── Shared application state ─────────────────────────────────────────
 
 #[derive(Clone)]
@@ -103,6 +120,8 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub game_server: Arc<GameServer>,
     pub maps_dir: PathBuf,
+    pub rate_limiter: RateLimiter,
+    pub game_queue: GameQueue,
 }
 
 // ── Error helper ──────────────────────────────────────────────────────
@@ -118,12 +137,19 @@ fn internal_error(e: sqlx::Error) -> impl IntoResponse {
 
 // ── Router ────────────────────────────────────────────────────────────
 
-pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
+pub fn router(
+    db: Arc<Database>,
+    game_server: Arc<GameServer>,
+    rate_limiter: RateLimiter,
+    game_queue: GameQueue,
+) -> Router {
     let maps_dir = PathBuf::from("../data/maps");
     let state = AppState {
         db,
         game_server,
         maps_dir,
+        rate_limiter,
+        game_queue,
     };
 
     Router::new()
@@ -147,7 +173,11 @@ pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
         .route("/api/bots/{id}/active-version", put(set_active_version))
         .route("/api/bots/{id}/stats", get(get_bot_stats))
         // Matches
+        .route("/api/matches", get(list_matches))
+        .route("/api/matches/challenge", post(create_challenge))
         .route("/api/matches/{id}", get(get_match))
+        // Queue
+        .route("/api/queue/status", get(queue_status))
         // Tournaments
         .route(
             "/api/tournaments",
@@ -185,6 +215,12 @@ pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
         .route("/api/game/start", post(start_game))
         .route("/api/game/status", get(game_status))
         .route("/api/game/stop", post(stop_game))
+        // API keys
+        .route("/api/api-keys", get(list_api_keys).post(create_api_key))
+        .route("/api/api-keys/{id}", delete(delete_api_key))
+        // Documentation
+        .route("/api/docs/lua-api", get(get_lua_api_docs))
+        .route("/llms.txt", get(get_llms_txt))
         // WebSocket
         .route("/ws/game", get(ws::ws_game))
         .with_state(state)
@@ -765,6 +801,221 @@ async fn stop_game(State(state): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "status": "stopping" }))).into_response()
 }
 
+// ── Match list handler ────────────────────────────────────────────────
+
+async fn list_matches(
+    State(state): State<AppState>,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(20).min(100);
+    match state.db.list_recent_matches(limit).await {
+        Ok(matches) => (StatusCode::OK, Json(json!(matches))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+// ── Challenge handler ────────────────────────────────────────────────
+
+async fn create_challenge(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<ChallengeRequest>,
+) -> impl IntoResponse {
+    let user_id = auth.0.sub;
+    let headless = req.headless.unwrap_or(false);
+    let format = req.format.clone().unwrap_or_else(|| "1v1".to_string());
+
+    if format != "1v1" && format != "ffa" {
+        return json_error(StatusCode::BAD_REQUEST, "format must be '1v1' or 'ffa'")
+            .into_response();
+    }
+
+    // Validate both bot versions exist
+    let version_a = match state.db.get_bot_version_by_id(req.bot_version_id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                &format!("Bot version {} not found", req.bot_version_id),
+            )
+            .into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let version_b = match state
+        .db
+        .get_bot_version_by_id(req.opponent_bot_version_id)
+        .await
+    {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                &format!("Bot version {} not found", req.opponent_bot_version_id),
+            )
+            .into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // Check rate limits
+    let limit_type = if headless {
+        RateLimitType::HeadlessChallenges
+    } else {
+        RateLimitType::LiveChallenges
+    };
+    if let Err(e) = state.rate_limiter.check_limit(user_id, limit_type) {
+        return json_error(StatusCode::TOO_MANY_REQUESTS, &e.to_string()).into_response();
+    }
+
+    // For live games, also check concurrent game limit
+    if !headless {
+        if let Err(e) = state
+            .rate_limiter
+            .check_limit(user_id, RateLimitType::LiveGames)
+        {
+            return json_error(StatusCode::TOO_MANY_REQUESTS, &e.to_string()).into_response();
+        }
+    }
+
+    // Create match record in DB
+    let map_name = req.map.clone().unwrap_or_else(|| "random".to_string());
+    let m = match state.db.create_match(&format, &map_name).await {
+        Ok(m) => m,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // Add participants
+    if let Err(e) = state
+        .db
+        .add_match_participant(m.id, req.bot_version_id, 0)
+        .await
+    {
+        return internal_error(e).into_response();
+    }
+    if let Err(e) = state
+        .db
+        .add_match_participant(m.id, req.opponent_bot_version_id, 1)
+        .await
+    {
+        return internal_error(e).into_response();
+    }
+
+    if headless {
+        // TODO: Run headless game in background thread
+        // For now, just queue it
+        state.game_queue.enqueue(crate::queue::QueueEntry {
+            match_id: m.id,
+            players: vec![
+                crate::queue::QueuePlayer {
+                    bot_version_id: req.bot_version_id,
+                    name: format!("Player 1 (v{})", version_a.version),
+                },
+                crate::queue::QueuePlayer {
+                    bot_version_id: req.opponent_bot_version_id,
+                    name: format!("Player 2 (v{})", version_b.version),
+                },
+            ],
+            map: req.map.clone(),
+            headless: true,
+        });
+
+        return (
+            StatusCode::CREATED,
+            Json(json!({
+                "match_id": m.id,
+                "status": "queued",
+                "message": "Headless challenge queued."
+            })),
+        )
+            .into_response();
+    }
+
+    // Live game: start via GameServer
+    if state.game_server.is_running() {
+        // Queue it instead of rejecting
+        state.game_queue.enqueue(crate::queue::QueueEntry {
+            match_id: m.id,
+            players: vec![
+                crate::queue::QueuePlayer {
+                    bot_version_id: req.bot_version_id,
+                    name: format!("Player 1 (v{})", version_a.version),
+                },
+                crate::queue::QueuePlayer {
+                    bot_version_id: req.opponent_bot_version_id,
+                    name: format!("Player 2 (v{})", version_b.version),
+                },
+            ],
+            map: req.map.clone(),
+            headless: false,
+        });
+
+        return (
+            StatusCode::CREATED,
+            Json(json!({
+                "match_id": m.id,
+                "status": "queued",
+                "message": "A game is already running. Challenge queued.",
+                "queue_depth": state.game_queue.depth(),
+            })),
+        )
+            .into_response();
+    }
+
+    // Resolve map
+    let world = match resolve_map(&state.maps_dir, &req.map) {
+        Ok(w) => w,
+        Err(e) => {
+            return json_error(StatusCode::BAD_REQUEST, &format!("Invalid map: {}", e))
+                .into_response();
+        }
+    };
+
+    // Get bot names from the DB
+    let name_a = match state.db.get_bot(version_a.bot_id).await {
+        Ok(Some(b)) => format!("{} v{}", b.name, version_a.version),
+        _ => format!("Player 1 (v{})", version_a.version),
+    };
+    let name_b = match state.db.get_bot(version_b.bot_id).await {
+        Ok(Some(b)) => format!("{} v{}", b.name, version_b.version),
+        _ => format!("Player 2 (v{})", version_b.version),
+    };
+
+    let players = vec![
+        PlayerEntry {
+            name: name_a,
+            code: version_a.code,
+            api_type: version_a.api_type,
+        },
+        PlayerEntry {
+            name: name_b,
+            code: version_b.code,
+            api_type: version_b.api_type,
+        },
+    ];
+
+    match state.game_server.start_game(world, players, None) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "match_id": m.id,
+                "status": "running",
+                "message": "Game started. Connect to /ws/game for live updates."
+            })),
+        )
+            .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+// ── Queue status handler ─────────────────────────────────────────────
+
+async fn queue_status(State(state): State<AppState>) -> impl IntoResponse {
+    let status = state.game_queue.status();
+    (StatusCode::OK, Json(json!(status))).into_response()
+}
+
 // ── Team handlers ──────────────────────────────────────────────────────
 
 async fn list_teams(State(state): State<AppState>, auth: AuthUser) -> impl IntoResponse {
@@ -923,4 +1174,114 @@ async fn create_team_version(
         Ok(version) => (StatusCode::CREATED, Json(json!(version))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
+}
+
+// ── API Key handlers ──────────────────────────────────────────────────
+
+async fn list_api_keys(State(state): State<AppState>, auth: AuthUser) -> impl IntoResponse {
+    match state.db.list_api_tokens(auth.0.sub).await {
+        Ok(tokens) => {
+            // Don't expose the hash to the client
+            let keys: Vec<serde_json::Value> = tokens
+                .iter()
+                .map(|t| {
+                    json!({
+                        "id": t.id,
+                        "name": t.name,
+                        "scopes": t.scopes,
+                        "last_used_at": t.last_used_at,
+                        "created_at": t.created_at,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!(keys))).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn create_api_key(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<CreateApiKeyRequest>,
+) -> impl IntoResponse {
+    if req.name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+
+    let scopes = req
+        .scopes
+        .unwrap_or_else(|| "bots:read,matches:read,leaderboard:read".to_string());
+
+    // Generate random token
+    let raw_token = format!("infon_{}", hex::encode(generate_random_bytes()));
+
+    // Hash it for storage
+    let token_hash = hash_token(&raw_token);
+
+    match state
+        .db
+        .create_api_token(auth.0.sub, &req.name, &token_hash, &scopes)
+        .await
+    {
+        Ok(token_record) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "id": token_record.id,
+                "name": token_record.name,
+                "token": raw_token,
+                "scopes": token_record.scopes,
+                "created_at": token_record.created_at,
+            })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn delete_api_key(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.delete_api_token(id, auth.0.sub).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "API key not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+fn generate_random_bytes() -> [u8; 32] {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes
+}
+
+fn hash_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+// ── Documentation handlers ────────────────────────────────────────────
+
+async fn get_lua_api_docs() -> impl IntoResponse {
+    let content = include_str!("../../../docs/lua-api-reference.md");
+    (
+        StatusCode::OK,
+        [("content-type", "text/markdown; charset=utf-8")],
+        content,
+    )
+        .into_response()
+}
+
+async fn get_llms_txt() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; charset=utf-8")],
+        crate::llms_txt::LLMS_TXT,
+    )
+        .into_response()
 }

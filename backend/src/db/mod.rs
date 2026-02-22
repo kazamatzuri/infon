@@ -125,6 +125,17 @@ pub struct LeaderboardEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ApiToken {
+    pub id: i64,
+    pub user_id: i64,
+    pub name: String,
+    pub token_hash: String,
+    pub scopes: String,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Team {
     pub id: i64,
     pub owner_id: i64,
@@ -376,6 +387,23 @@ impl Database {
                 draws INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(team_id, version)
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // API tokens table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                scopes TEXT NOT NULL DEFAULT 'bots:read,matches:read,leaderboard:read',
+                last_used_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         "#,
         )
@@ -687,6 +715,16 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    pub async fn list_recent_matches(&self, limit: i64) -> Result<Vec<Match>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Match>(
+            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn add_match_participant(
@@ -1131,6 +1169,68 @@ impl Database {
         // Placeholder: 2v2 teams will be added in Phase 7
         Ok(vec![])
     }
+
+    // ── API Token CRUD ──────────────────────────────────────────────────
+
+    pub async fn create_api_token(
+        &self,
+        user_id: i64,
+        name: &str,
+        token_hash: &str,
+        scopes: &str,
+    ) -> Result<ApiToken, sqlx::Error> {
+        let row = sqlx::query_as::<_, ApiToken>(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES (?, ?, ?, ?) RETURNING id, user_id, name, token_hash, scopes, last_used_at, created_at",
+        )
+        .bind(user_id)
+        .bind(name)
+        .bind(token_hash)
+        .bind(scopes)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_api_tokens(&self, user_id: i64) -> Result<Vec<ApiToken>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ApiToken>(
+            "SELECT id, user_id, name, token_hash, scopes, last_used_at, created_at FROM api_tokens WHERE user_id = ? ORDER BY id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn delete_api_token(&self, id: i64, user_id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ApiToken>, sqlx::Error> {
+        let row = sqlx::query_as::<_, ApiToken>(
+            "SELECT id, user_id, name, token_hash, scopes, last_used_at, created_at FROM api_tokens WHERE token_hash = ?",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_token_last_used(&self, id: i64) -> Result<bool, sqlx::Error> {
+        let result =
+            sqlx::query("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 #[cfg(test)]
@@ -1429,6 +1529,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_recent_matches() {
+        let db = test_db().await;
+
+        // Create several matches
+        let m1 = db.create_match("1v1", "random").await.unwrap();
+        let m2 = db.create_match("ffa", "desert").await.unwrap();
+        let m3 = db.create_match("1v1", "forest").await.unwrap();
+
+        // List all
+        let matches = db.list_recent_matches(10).await.unwrap();
+        assert_eq!(matches.len(), 3);
+        // Should be ordered by created_at DESC (most recent first)
+        // Since they are created in quick succession, IDs should be descending
+        assert_eq!(matches[0].id, m3.id);
+        assert_eq!(matches[1].id, m2.id);
+        assert_eq!(matches[2].id, m1.id);
+
+        // List with limit
+        let limited = db.list_recent_matches(2).await.unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].id, m3.id);
+        assert_eq!(limited[1].id, m2.id);
+
+        // Empty result
+        let empty_db = test_db().await;
+        let empty = empty_db.list_recent_matches(10).await.unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_create_team_with_versions() {
         let db = test_db().await;
 
@@ -1649,5 +1779,80 @@ mod tests {
         // 2v2 placeholder should return empty
         let lb_2v2 = db.leaderboard_2v2(50, 0).await.unwrap();
         assert!(lb_2v2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_api_token_crud() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("tokenuser", "token@test.com", "hash", "Token User")
+            .await
+            .unwrap();
+
+        // Create a token
+        let token = db
+            .create_api_token(user.id, "My Key", "somehash123", "bots:read,matches:read")
+            .await
+            .unwrap();
+        assert_eq!(token.name, "My Key");
+        assert_eq!(token.user_id, user.id);
+        assert_eq!(token.scopes, "bots:read,matches:read");
+        assert!(token.last_used_at.is_none());
+
+        // List tokens
+        let tokens = db.list_api_tokens(user.id).await.unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].name, "My Key");
+
+        // Look up by hash
+        let found = db.get_api_token_by_hash("somehash123").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, token.id);
+
+        let not_found = db.get_api_token_by_hash("nonexistent").await.unwrap();
+        assert!(not_found.is_none());
+
+        // Update last used
+        db.update_token_last_used(token.id).await.unwrap();
+        let updated = db
+            .get_api_token_by_hash("somehash123")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.last_used_at.is_some());
+
+        // Delete token (wrong user)
+        assert!(!db.delete_api_token(token.id, 999).await.unwrap());
+
+        // Delete token (correct user)
+        assert!(db.delete_api_token(token.id, user.id).await.unwrap());
+        let tokens = db.list_api_tokens(user.id).await.unwrap();
+        assert!(tokens.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_api_token_unique_hashes() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("hashuser", "hash@test.com", "hash", "Hash User")
+            .await
+            .unwrap();
+
+        let t1 = db
+            .create_api_token(user.id, "Key 1", "hash_aaa", "bots:read")
+            .await
+            .unwrap();
+        let t2 = db
+            .create_api_token(user.id, "Key 2", "hash_bbb", "bots:read")
+            .await
+            .unwrap();
+
+        assert_ne!(t1.id, t2.id);
+        assert_ne!(t1.token_hash, t2.token_hash);
+
+        let tokens = db.list_api_tokens(user.id).await.unwrap();
+        assert_eq!(tokens.len(), 2);
     }
 }

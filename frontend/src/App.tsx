@@ -8,6 +8,7 @@ import { GameViewer } from './pages/GameViewer';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Leaderboard } from './pages/Leaderboard';
+import { ApiKeys } from './pages/ApiKeys';
 import './App.css';
 
 function NavBar() {
@@ -24,6 +25,7 @@ function NavBar() {
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         {user ? (
           <>
+            <NavLink to="/api-keys" className={navLinkClass}>API Keys</NavLink>
             <span style={{ color: '#aaa', fontSize: 14 }}>{user.username}</span>
             <button onClick={logout} style={{ padding: '4px 12px', fontSize: 13, cursor: 'pointer' }}>
               Logout
@@ -55,6 +57,7 @@ function App() {
               <Route path="/tournaments" element={<TournamentList />} />
               <Route path="/tournaments/:id" element={<TournamentDetail />} />
               <Route path="/game" element={<GameViewer />} />
+              <Route path="/api-keys" element={<ApiKeys />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
             </Routes>

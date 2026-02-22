@@ -3,6 +3,9 @@ mod auth;
 mod db;
 mod elo;
 mod engine;
+mod llms_txt;
+mod queue;
+mod rate_limit;
 
 use axum::{
     routing::{get, post},
@@ -13,6 +16,8 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 use engine::server::GameServer;
+use queue::GameQueue;
+use rate_limit::RateLimiter;
 
 async fn health_check() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "infon-backend" }))
@@ -30,6 +35,8 @@ async fn main() {
     let db = Arc::new(db);
 
     let game_server = Arc::new(GameServer::new());
+    let rate_limiter = RateLimiter::new();
+    let game_queue = GameQueue::new();
 
     let app = Router::new()
         .route("/health", get(health_check))
@@ -38,7 +45,7 @@ async fn main() {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/me", get(auth::me))
         .with_state(db.clone())
-        .merge(api::router(db, game_server))
+        .merge(api::router(db, game_server, rate_limiter, game_queue))
         .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
