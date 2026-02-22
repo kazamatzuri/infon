@@ -84,7 +84,7 @@ export function Leaderboard() {
         <p style={{ color: '#888' }}>Loading...</p>
       ) : entries.length === 0 ? (
         <p style={{ color: '#888', textAlign: 'center', padding: '48px' }}>
-          {tab === '2v2' ? 'Team leaderboards coming soon!' : 'No entries yet. Play some games to populate the leaderboard!'}
+          No entries yet. Play some games to populate the leaderboard!
         </p>
       ) : (
         <>

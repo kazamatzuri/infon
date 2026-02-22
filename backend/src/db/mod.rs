@@ -1423,11 +1423,38 @@ impl Database {
 
     pub async fn leaderboard_2v2(
         &self,
-        _limit: i64,
-        _offset: i64,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
-        // Placeholder: 2v2 teams will be added in Phase 7
-        Ok(vec![])
+        let rows = sqlx::query_as::<_, LeaderboardEntry>(
+            r#"
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY tv.elo_rating DESC) AS rank,
+                tv.id AS bot_version_id,
+                t.name AS bot_name,
+                tv.version,
+                COALESCE(u.username, 'anonymous') AS owner_username,
+                tv.elo_rating AS rating,
+                tv.games_played,
+                tv.wins,
+                tv.losses,
+                CASE WHEN tv.games_played > 0
+                    THEN CAST(tv.wins AS REAL) / tv.games_played
+                    ELSE 0.0
+                END AS win_rate
+            FROM team_versions tv
+            JOIN teams t ON t.id = tv.team_id
+            LEFT JOIN users u ON u.id = t.owner_id
+            WHERE tv.games_played > 0
+            ORDER BY tv.elo_rating DESC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     // ── API Token CRUD ──────────────────────────────────────────────────
