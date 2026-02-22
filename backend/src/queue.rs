@@ -1,9 +1,14 @@
 // Simple FIFO game queue for pending match requests.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+
+use crate::api::{build_game_completion_callback, resolve_map};
+use crate::db::Database;
+use crate::engine::server::{GameServer, PlayerEntry};
 
 /// A pending match in the queue.
 #[derive(Debug, Clone)]
@@ -87,6 +92,96 @@ impl Default for GameQueue {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Spawn a background task that polls the queue and starts games when the server is idle.
+pub fn spawn_queue_worker(
+    db: Arc<Database>,
+    game_server: Arc<GameServer>,
+    game_queue: GameQueue,
+    maps_dir: PathBuf,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+            // Only process if no game is running
+            if game_server.is_running() {
+                continue;
+            }
+
+            let entry = match game_queue.dequeue() {
+                Some(e) => e,
+                None => continue,
+            };
+
+            // Load bot code for each player
+            let mut players = Vec::new();
+            let mut version_ids = Vec::new();
+            let mut ok = true;
+            for qp in &entry.players {
+                match db.get_bot_version_by_id(qp.bot_version_id).await {
+                    Ok(Some(v)) => {
+                        players.push(PlayerEntry {
+                            name: qp.name.clone(),
+                            code: v.code,
+                            api_type: v.api_type,
+                        });
+                        version_ids.push(qp.bot_version_id);
+                    }
+                    _ => {
+                        tracing::error!(
+                            "Queue worker: bot version {} not found",
+                            qp.bot_version_id
+                        );
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+
+            if !ok {
+                continue;
+            }
+
+            // Resolve map
+            let world = match resolve_map(&maps_dir, &entry.map) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("Queue worker: invalid map: {e}");
+                    continue;
+                }
+            };
+
+            // Determine format from number of players
+            let format = if entry.players.len() == 2 {
+                "1v1".to_string()
+            } else {
+                "ffa".to_string()
+            };
+
+            // Build completion callback
+            let on_complete = build_game_completion_callback(
+                db.clone(),
+                entry.match_id,
+                version_ids.clone(),
+                format,
+            );
+
+            let max_ticks = if entry.headless { Some(6000) } else { None };
+            if let Err(e) = game_server.start_game_with_callback(
+                world,
+                players,
+                max_ticks,
+                Some(entry.match_id),
+                version_ids,
+                entry.headless,
+                Some(on_complete),
+            ) {
+                tracing::error!("Queue worker: failed to start game: {e}");
+            }
+        }
+    });
 }
 
 #[cfg(test)]

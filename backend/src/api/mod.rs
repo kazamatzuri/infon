@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::Database;
-use crate::engine::server::{self, GameServer, PlayerEntry};
+use crate::engine::server::{self, GameResult, GameServer, PlayerEntry};
 use crate::engine::world::World;
 use crate::queue::GameQueue;
 use crate::rate_limit::{RateLimitType, RateLimiter};
@@ -277,11 +277,25 @@ async fn get_bot(State(state): State<AppState>, Path(id): Path<i64>) -> impl Int
 
 async fn update_bot(
     State(state): State<AppState>,
+    auth: AuthUser,
     Path(id): Path<i64>,
     Json(req): Json<UpdateBotRequest>,
 ) -> impl IntoResponse {
     if req.name.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    // Check ownership
+    match state.db.get_bot(id).await {
+        Ok(Some(bot)) => {
+            if let Some(owner_id) = bot.owner_id {
+                if owner_id != auth.0.sub {
+                    return json_error(StatusCode::FORBIDDEN, "You do not own this bot")
+                        .into_response();
+                }
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
     }
     let description = req.description.unwrap_or_default();
     match state.db.update_bot(id, &req.name, &description).await {
@@ -291,7 +305,24 @@ async fn update_bot(
     }
 }
 
-async fn delete_bot(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn delete_bot(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    // Check ownership
+    match state.db.get_bot(id).await {
+        Ok(Some(bot)) => {
+            if let Some(owner_id) = bot.owner_id {
+                if owner_id != auth.0.sub {
+                    return json_error(StatusCode::FORBIDDEN, "You do not own this bot")
+                        .into_response();
+                }
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
     match state.db.delete_bot(id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
@@ -319,14 +350,22 @@ async fn list_bot_versions(
 
 async fn create_bot_version(
     State(state): State<AppState>,
+    auth: AuthUser,
     Path(bot_id): Path<i64>,
     Json(req): Json<CreateBotVersionRequest>,
 ) -> impl IntoResponse {
-    // Check bot exists
+    // Check bot exists and ownership
     match state.db.get_bot(bot_id).await {
+        Ok(Some(bot)) => {
+            if let Some(owner_id) = bot.owner_id {
+                if owner_id != auth.0.sub {
+                    return json_error(StatusCode::FORBIDDEN, "You do not own this bot")
+                        .into_response();
+                }
+            }
+        }
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
         Err(e) => return internal_error(e).into_response(),
-        Ok(Some(_)) => {}
     }
     let api_type = req.api_type.unwrap_or_else(|| "oo".to_string());
     if api_type != "oo" && api_type != "state" {
@@ -358,9 +397,27 @@ async fn get_bot_version(
 
 async fn update_bot_version(
     State(state): State<AppState>,
+    auth: AuthUser,
     Path((_bot_id, version_id)): Path<(i64, i64)>,
     Json(req): Json<UpdateBotVersionRequest>,
 ) -> impl IntoResponse {
+    // Check ownership via the version's bot
+    match state.db.get_bot_version_by_id(version_id).await {
+        Ok(Some(version)) => match state.db.get_bot(version.bot_id).await {
+            Ok(Some(bot)) => {
+                if let Some(owner_id) = bot.owner_id {
+                    if owner_id != auth.0.sub {
+                        return json_error(StatusCode::FORBIDDEN, "You do not own this bot")
+                            .into_response();
+                    }
+                }
+            }
+            Ok(None) => return json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
+            Err(e) => return internal_error(e).into_response(),
+        },
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Version not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
     if let Some(archived) = req.is_archived {
         match state.db.archive_version(version_id, archived).await {
             Ok(true) => {}
@@ -379,9 +436,23 @@ async fn update_bot_version(
 
 async fn set_active_version(
     State(state): State<AppState>,
+    auth: AuthUser,
     Path(bot_id): Path<i64>,
     Json(req): Json<SetActiveVersionRequest>,
 ) -> impl IntoResponse {
+    // Check ownership
+    match state.db.get_bot(bot_id).await {
+        Ok(Some(bot)) => {
+            if let Some(owner_id) = bot.owner_id {
+                if owner_id != auth.0.sub {
+                    return json_error(StatusCode::FORBIDDEN, "You do not own this bot")
+                        .into_response();
+                }
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
     // Verify the version belongs to this bot
     match state.db.get_bot_version(bot_id, req.version_id).await {
         Ok(None) => {
@@ -795,7 +866,7 @@ async fn list_maps(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Resolve an optional map name to a World.
-fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World, String> {
+pub fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World, String> {
     use crate::engine::world::RandomMapParams;
     match map.as_deref() {
         None | Some("random") => Ok(World::generate_random(RandomMapParams::default())),
@@ -1116,15 +1187,20 @@ async fn create_challenge(
         },
     ];
 
-    // TODO: Wire Elo updates to match completion. When the game finishes
-    // (via GameServer game_end callback or queue worker), compute new Elo
-    // ratings for both participants using the elo module, then call
-    // db.update_version_elo() and db.update_version_stats() for each
-    // participant, and db.update_match_participant() with elo_before/elo_after.
-    // This requires a game completion callback from GameServer that carries
-    // the match_id and final scores back to the API layer.
+    // Build completion callback for Elo, replay, and match finishing
+    let version_ids: Vec<i64> = vec![req.bot_version_id, req.opponent_bot_version_id];
+    let on_complete =
+        build_game_completion_callback(state.db.clone(), m.id, version_ids.clone(), format.clone());
 
-    match state.game_server.start_game(world, players, None) {
+    match state.game_server.start_game_with_callback(
+        world,
+        players,
+        None,
+        Some(m.id),
+        version_ids,
+        false,
+        Some(on_complete),
+    ) {
         Ok(()) => (
             StatusCode::CREATED,
             Json(json!({
@@ -1392,6 +1468,154 @@ fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+// ── Game completion callback builder ──────────────────────────────
+
+/// Build a callback closure that handles post-game bookkeeping:
+/// saving replays, finishing matches, updating Elo ratings and version stats.
+pub fn build_game_completion_callback(
+    db: Arc<Database>,
+    match_id: i64,
+    version_ids: Vec<i64>,
+    format: String,
+) -> Box<dyn FnOnce(GameResult) + Send + 'static> {
+    let rt = tokio::runtime::Handle::current();
+
+    Box::new(move |result: GameResult| {
+        rt.spawn(async move {
+            // 1. Save replay
+            if let Err(e) = db
+                .save_replay(match_id, &result.replay_data, result.tick_count)
+                .await
+            {
+                tracing::error!("Failed to save replay for match {match_id}: {e}");
+            }
+
+            // 2. Determine winner bot_version_id
+            let winner_version_id = result
+                .winner_player_index
+                .and_then(|idx| version_ids.get(idx).copied());
+
+            // 3. Finish match
+            if let Err(e) = db.finish_match(match_id, winner_version_id).await {
+                tracing::error!("Failed to finish match {match_id}: {e}");
+            }
+
+            // 4. Get participants and update stats + Elo
+            let participants = match db.get_match_participants(match_id).await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("Failed to get participants for match {match_id}: {e}");
+                    return;
+                }
+            };
+
+            // Update per-participant stats
+            for (i, p) in participants.iter().enumerate() {
+                let score = result.player_scores.get(i).map(|s| s.score).unwrap_or(0);
+                let won = winner_version_id == Some(p.bot_version_id);
+                let lost = winner_version_id.is_some() && !won;
+                let draw = winner_version_id.is_none();
+
+                let _ = db
+                    .update_match_participant(
+                        p.id,
+                        score,
+                        Some((i + 1) as i32),
+                        Some(0),
+                        Some(0),
+                        0,
+                        0,
+                        0,
+                    )
+                    .await;
+
+                let _ = db
+                    .update_version_stats(p.bot_version_id, won, lost, draw, score, 0, 0, 0)
+                    .await;
+            }
+
+            // Elo calculation for 1v1
+            if format == "1v1" && participants.len() == 2 {
+                let p0 = &participants[0];
+                let p1 = &participants[1];
+                let (v0, v1) = match (
+                    db.get_bot_version_by_id(p0.bot_version_id).await,
+                    db.get_bot_version_by_id(p1.bot_version_id).await,
+                ) {
+                    (Ok(Some(v0)), Ok(Some(v1))) => (v0, v1),
+                    _ => return,
+                };
+
+                let outcome_0 = if winner_version_id == Some(p0.bot_version_id) {
+                    crate::elo::Outcome::Win
+                } else if winner_version_id == Some(p1.bot_version_id) {
+                    crate::elo::Outcome::Loss
+                } else {
+                    crate::elo::Outcome::Draw
+                };
+                let outcome_1 = match outcome_0 {
+                    crate::elo::Outcome::Win => crate::elo::Outcome::Loss,
+                    crate::elo::Outcome::Loss => crate::elo::Outcome::Win,
+                    crate::elo::Outcome::Draw => crate::elo::Outcome::Draw,
+                };
+
+                let new_elo_0 = crate::elo::calculate_new_rating(
+                    v0.elo_1v1,
+                    v1.elo_1v1,
+                    outcome_0,
+                    v0.games_played,
+                );
+                let new_elo_1 = crate::elo::calculate_new_rating(
+                    v1.elo_1v1,
+                    v0.elo_1v1,
+                    outcome_1,
+                    v1.games_played,
+                );
+
+                // Update elo_before/elo_after on participants
+                let score_0 = result.player_scores.get(0).map(|s| s.score).unwrap_or(0);
+                let score_1 = result.player_scores.get(1).map(|s| s.score).unwrap_or(0);
+
+                let _ = db
+                    .update_match_participant(
+                        p0.id,
+                        score_0,
+                        Some(if outcome_0 == crate::elo::Outcome::Win {
+                            1
+                        } else {
+                            2
+                        }),
+                        Some(v0.elo_1v1),
+                        Some(new_elo_0),
+                        0,
+                        0,
+                        0,
+                    )
+                    .await;
+                let _ = db
+                    .update_match_participant(
+                        p1.id,
+                        score_1,
+                        Some(if outcome_1 == crate::elo::Outcome::Win {
+                            1
+                        } else {
+                            2
+                        }),
+                        Some(v1.elo_1v1),
+                        Some(new_elo_1),
+                        0,
+                        0,
+                        0,
+                    )
+                    .await;
+
+                let _ = db.update_version_elo(p0.bot_version_id, new_elo_0).await;
+                let _ = db.update_version_elo(p1.bot_version_id, new_elo_1).await;
+            }
+        });
+    })
 }
 
 // ── Documentation handlers ────────────────────────────────────────────

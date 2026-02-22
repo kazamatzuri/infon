@@ -40,6 +40,14 @@ async fn main() {
     let rate_limiter = RateLimiter::new();
     let game_queue = GameQueue::new();
 
+    // Spawn background queue worker to process pending games
+    crate::queue::spawn_queue_worker(
+        db.clone(),
+        game_server.clone(),
+        game_queue.clone(),
+        std::path::PathBuf::from("../data/maps"),
+    );
+
     // Inject Arc<Database> into request extensions so auth extractors can
     // look up API tokens without needing access to AppState directly.
     let db_for_ext = db.clone();

@@ -8,9 +8,30 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::replay::ReplayRecorder;
+
 use super::config::*;
 use super::game::{Game, GameSnapshot, PlayerSnapshot, WorldSnapshot};
 use super::world::{RandomMapParams, World};
+
+/// Result of a completed game, passed to the on_complete callback.
+pub struct GameResult {
+    pub match_id: Option<i64>,
+    pub winner_player_index: Option<usize>,
+    pub player_scores: Vec<PlayerScore>,
+    pub replay_data: Vec<u8>,
+    pub tick_count: i32,
+}
+
+/// Score data for one player in a completed game.
+pub struct PlayerScore {
+    pub player_index: usize,
+    pub bot_version_id: i64,
+    pub score: i32,
+    pub creatures_spawned: i32,
+    pub creatures_killed: i32,
+    pub creatures_lost: i32,
+}
 
 /// Metadata about an available map file.
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +166,25 @@ impl GameServer {
         players: Vec<PlayerEntry>,
         max_ticks: Option<u64>,
     ) -> Result<(), String> {
+        self.start_game_with_callback(world, players, max_ticks, None, vec![], false, None)
+    }
+
+    /// Start a game with a completion callback for Elo updates, replay saving, etc.
+    ///
+    /// - `match_id`: optional DB match ID to include in the GameResult
+    /// - `bot_version_ids`: one per player, same order as `players` vec
+    /// - `headless`: if true, skip the 100ms per-tick sleep (fast mode)
+    /// - `on_complete`: called on the game thread when the game finishes
+    pub fn start_game_with_callback(
+        &self,
+        world: World,
+        players: Vec<PlayerEntry>,
+        max_ticks: Option<u64>,
+        match_id: Option<i64>,
+        bot_version_ids: Vec<i64>,
+        headless: bool,
+        on_complete: Option<Box<dyn FnOnce(GameResult) + Send + 'static>>,
+    ) -> Result<(), String> {
         if self.is_running() {
             return Err("A game is already running".into());
         }
@@ -159,6 +199,7 @@ impl GameServer {
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut game = Game::new(world);
+                let mut recorder = ReplayRecorder::new();
 
                 // Add players and spawn initial creatures
                 let mut player_ids = Vec::new();
@@ -197,7 +238,8 @@ impl GameServer {
                 let world_msg = GameMessage::WorldInit(world_snap);
                 if let Ok(json) = serde_json::to_string(&world_msg) {
                     *world_json.lock().unwrap() = Some(json.clone());
-                    let _ = tx.send(json);
+                    let _ = tx.send(json.clone());
+                    recorder.record_message(&json);
                 }
 
                 // Game loop
@@ -210,8 +252,8 @@ impl GameServer {
                     let snapshot = game.snapshot();
                     let msg = GameMessage::Snapshot(snapshot);
                     if let Ok(json) = serde_json::to_string(&msg) {
-                        // If send fails, there are no receivers -- that is fine, keep running
-                        let _ = tx.send(json);
+                        let _ = tx.send(json.clone());
+                        recorder.record_message(&json);
                     }
 
                     // Check win condition: only one player has creatures left
@@ -221,7 +263,9 @@ impl GameServer {
                         break;
                     }
 
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if !headless {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
 
                 // Game ended -- send final scores
@@ -236,10 +280,43 @@ impl GameServer {
 
                 let end_msg = GameMessage::GameEnd {
                     winner,
-                    final_scores: final_snap.players,
+                    final_scores: final_snap.players.clone(),
                 };
                 if let Ok(json) = serde_json::to_string(&end_msg) {
-                    let _ = tx.send(json);
+                    let _ = tx.send(json.clone());
+                    recorder.record_message(&json);
+                }
+
+                // Build GameResult and invoke callback
+                if let Some(callback) = on_complete {
+                    // Determine winner player index (index into players vec)
+                    let winner_player_index = winner
+                        .and_then(|winner_id| player_ids.iter().position(|&pid| pid == winner_id));
+
+                    // Build player scores from the final snapshot
+                    let player_scores: Vec<PlayerScore> = final_snap
+                        .players
+                        .iter()
+                        .enumerate()
+                        .map(|(i, ps)| PlayerScore {
+                            player_index: i,
+                            bot_version_id: bot_version_ids.get(i).copied().unwrap_or(0),
+                            score: ps.score,
+                            creatures_spawned: 0,
+                            creatures_killed: 0,
+                            creatures_lost: 0,
+                        })
+                        .collect();
+
+                    let game_result = GameResult {
+                        match_id,
+                        winner_player_index,
+                        player_scores,
+                        replay_data: recorder.finish(),
+                        tick_count: tick_count as i32,
+                    };
+
+                    callback(game_result);
                 }
             }));
 
