@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { MatchDetail as MatchDetailType, ReplayData, GameMessage, WorldMsg, SnapshotMsg, GameEndMsg, PlayerSnapshot } from '../api/client';
+import type { MatchDetail as MatchDetailType, ReplayData } from '../api/client';
 import { ReplayCanvas } from '../components/ReplayCanvas';
 
 export function MatchDetail() {

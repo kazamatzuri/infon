@@ -14,6 +14,7 @@ const AVAILABLE_SCOPES = [
   'bots:read',
   'bots:write',
   'matches:read',
+  'matches:write',
   'leaderboard:read',
 ];
 

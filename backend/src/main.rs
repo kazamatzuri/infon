@@ -40,6 +40,10 @@ async fn main() {
     let rate_limiter = RateLimiter::new();
     let game_queue = GameQueue::new();
 
+    // Inject Arc<Database> into request extensions so auth extractors can
+    // look up API tokens without needing access to AppState directly.
+    let db_for_ext = db.clone();
+
     let app = Router::new()
         .route("/health", get(health_check))
         // Auth routes (no auth required)
@@ -48,7 +52,16 @@ async fn main() {
         .route("/api/auth/me", get(auth::me))
         .with_state(db.clone())
         .merge(api::router(db, game_server, rate_limiter, game_queue))
-        .layer(CorsLayer::permissive());
+        .layer(CorsLayer::permissive())
+        .layer(axum::middleware::from_fn(
+            move |mut req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                let db = db_for_ext.clone();
+                async move {
+                    req.extensions_mut().insert(db);
+                    next.run(req).await
+                }
+            },
+        ));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await

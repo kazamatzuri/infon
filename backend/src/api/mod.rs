@@ -1116,6 +1116,14 @@ async fn create_challenge(
         },
     ];
 
+    // TODO: Wire Elo updates to match completion. When the game finishes
+    // (via GameServer game_end callback or queue worker), compute new Elo
+    // ratings for both participants using the elo module, then call
+    // db.update_version_elo() and db.update_version_stats() for each
+    // participant, and db.update_match_participant() with elo_before/elo_after.
+    // This requires a game completion callback from GameServer that carries
+    // the match_id and final scores back to the API layer.
+
     match state.game_server.start_game(world, players, None) {
         Ok(()) => (
             StatusCode::CREATED,

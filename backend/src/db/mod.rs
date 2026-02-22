@@ -636,13 +636,31 @@ impl Database {
 
         let next_version = max_version.unwrap_or(0) + 1;
 
+        // Soft reset: inherit Elo from parent version using (parent_elo + 1500) / 2
+        let starting_elo = if next_version > 1 {
+            let parent_elo: Option<i32> = sqlx::query_scalar(
+                "SELECT elo_rating FROM bot_versions WHERE bot_id = ? AND version = ?",
+            )
+            .bind(bot_id)
+            .bind(next_version - 1)
+            .fetch_one(&self.pool)
+            .await?;
+            let parent = parent_elo.unwrap_or(1500);
+            (parent + 1500) / 2
+        } else {
+            1500
+        };
+
         let row = sqlx::query_as::<_, BotVersion>(
-            "INSERT INTO bot_versions (bot_id, version, code, api_type) VALUES (?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
+            "INSERT INTO bot_versions (bot_id, version, code, api_type, elo_rating, elo_1v1, elo_peak) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
         )
         .bind(bot_id)
         .bind(next_version)
         .bind(code)
         .bind(api_type)
+        .bind(starting_elo)
+        .bind(starting_elo)
+        .bind(starting_elo)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -2108,6 +2126,50 @@ mod tests {
         assert_eq!(standings[1].bot_name, "StandingsB");
         assert_eq!(standings[1].total_score, 80);
         assert_eq!(standings[1].matches_played, 1);
+    }
+
+    #[tokio::test]
+    async fn test_soft_reset_elo() {
+        let db = test_db().await;
+
+        let bot = db.create_bot("EloResetBot", "", None).await.unwrap();
+
+        // First version should have default 1500 Elo
+        let v1 = db
+            .create_bot_version(bot.id, "print('v1')", "oo")
+            .await
+            .unwrap();
+        assert_eq!(v1.elo_rating, 1500);
+        assert_eq!(v1.elo_1v1, 1500);
+
+        // Simulate v1 gaining Elo to 1700
+        db.update_version_elo(v1.id, 1700).await.unwrap();
+
+        // Second version should have soft reset: (1700 + 1500) / 2 = 1600
+        let v2 = db
+            .create_bot_version(bot.id, "print('v2')", "oo")
+            .await
+            .unwrap();
+        assert_eq!(v2.version, 2);
+        assert_eq!(v2.elo_rating, 1600);
+        assert_eq!(v2.elo_1v1, 1600);
+        assert_eq!(v2.elo_peak, 1600);
+
+        // Simulate v2 dropping to 1400
+        db.update_version_elo(v2.id, 1400).await.unwrap();
+
+        // Third version: (1400 + 1500) / 2 = 1450
+        let v3 = db
+            .create_bot_version(bot.id, "print('v3')", "oo")
+            .await
+            .unwrap();
+        assert_eq!(v3.version, 3);
+        assert_eq!(v3.elo_rating, 1450);
+
+        // Default case: new bot, first version = 1500
+        let bot2 = db.create_bot("FreshBot", "", None).await.unwrap();
+        let fresh_v1 = db.create_bot_version(bot2.id, "code", "oo").await.unwrap();
+        assert_eq!(fresh_v1.elo_rating, 1500);
     }
 
     #[tokio::test]

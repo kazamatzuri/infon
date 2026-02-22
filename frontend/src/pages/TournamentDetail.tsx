@@ -320,22 +320,22 @@ export function TournamentDetail() {
             <thead>
               <tr style={{ borderBottom: '1px solid #333' }}>
                 <th style={thStyle}>Rank</th>
-                <th style={thStyle}>Player</th>
+                <th style={thStyle}>Bot</th>
                 <th style={thStyle}>Score</th>
-                <th style={thStyle}>Creatures</th>
+                <th style={thStyle}>Spawned</th>
                 <th style={thStyle}>Kills</th>
               </tr>
             </thead>
             <tbody>
               {results
-                .sort((a, b) => b.score - a.score)
+                .sort((a, b) => b.final_score - a.final_score)
                 .map((r, i) => (
-                  <tr key={r.player_id} style={{ borderBottom: '1px solid #222' }}>
+                  <tr key={r.id} style={{ borderBottom: '1px solid #222' }}>
                     <td style={tdStyle}>#{i + 1}</td>
-                    <td style={{ ...tdStyle, color: '#16c79a' }}>{r.player_name}</td>
-                    <td style={tdStyle}>{r.score}</td>
-                    <td style={tdStyle}>{r.num_creatures}</td>
-                    <td style={tdStyle}>{r.kills}</td>
+                    <td style={{ ...tdStyle, color: '#16c79a' }}>Slot {r.player_slot} (v#{r.bot_version_id})</td>
+                    <td style={tdStyle}>{r.final_score}</td>
+                    <td style={tdStyle}>{r.creatures_spawned}</td>
+                    <td style={tdStyle}>{r.creatures_killed}</td>
                   </tr>
                 ))}
             </tbody>

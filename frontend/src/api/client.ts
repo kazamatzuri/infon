@@ -14,6 +14,7 @@ export interface Bot {
   description: string;
   owner_id: number | null;
   visibility: string;
+  active_version_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -24,6 +25,20 @@ export interface BotVersion {
   version: number;
   code: string;
   api_type: string;
+  is_archived: boolean;
+  elo_rating: number;
+  elo_1v1: number;
+  elo_peak: number;
+  games_played: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  ffa_placement_points: number;
+  ffa_games: number;
+  creatures_spawned: number;
+  creatures_killed: number;
+  creatures_lost: number;
+  total_score: number;
   created_at: string;
 }
 
@@ -32,11 +47,11 @@ export interface Tournament {
   name: string;
   status: string;
   map: string;
+  config: string;
   format: string;
   current_round: number;
   total_rounds: number;
   created_at: string;
-  updated_at: string;
 }
 
 export interface TournamentEntry {
@@ -108,12 +123,37 @@ export interface ReplayData {
   messages: GameMessage[];
 }
 
+export interface Team {
+  id: number;
+  owner_id: number;
+  name: string;
+  created_at: string;
+}
+
+export interface TeamVersion {
+  id: number;
+  team_id: number;
+  version: number;
+  bot_version_a: number;
+  bot_version_b: number;
+  elo_rating: number;
+  games_played: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  created_at: string;
+}
+
 export interface TournamentResult {
-  player_id: number;
-  player_name: string;
-  score: number;
-  num_creatures: number;
-  kills: number;
+  id: number;
+  tournament_id: number;
+  player_slot: number;
+  bot_version_id: number;
+  final_score: number;
+  creatures_spawned: number;
+  creatures_killed: number;
+  creatures_lost: number;
+  finished_at: string;
 }
 
 // WebSocket message types
@@ -314,4 +354,33 @@ export const api = {
   // Match listing
   listMatches: (limit = 20): Promise<MatchDetail['match'][]> =>
     fetch(`${BASE_URL}/api/matches?limit=${limit}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),
+
+  // Teams
+  listTeams: (): Promise<Team[]> =>
+    fetch(`${BASE_URL}/api/teams`, { headers: authHeaders() }).then(r => handleResponse<Team[]>(r)),
+
+  createTeam: (name: string): Promise<Team> =>
+    fetch(`${BASE_URL}/api/teams`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name }),
+    }).then(r => handleResponse<Team>(r)),
+
+  getTeam: (id: number): Promise<Team> =>
+    fetch(`${BASE_URL}/api/teams/${id}`, { headers: authHeaders() }).then(r => handleResponse<Team>(r)),
+
+  deleteTeam: (id: number): Promise<void> =>
+    fetch(`${BASE_URL}/api/teams/${id}`, { method: 'DELETE', headers: authHeaders() }).then(r => {
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+    }),
+
+  listTeamVersions: (teamId: number): Promise<TeamVersion[]> =>
+    fetch(`${BASE_URL}/api/teams/${teamId}/versions`, { headers: authHeaders() }).then(r => handleResponse<TeamVersion[]>(r)),
+
+  createTeamVersion: (teamId: number, botVersionA: number, botVersionB: number): Promise<TeamVersion> =>
+    fetch(`${BASE_URL}/api/teams/${teamId}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ bot_version_a: botVersionA, bot_version_b: botVersionB }),
+    }).then(r => handleResponse<TeamVersion>(r)),
 };

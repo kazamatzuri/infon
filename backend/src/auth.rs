@@ -1,4 +1,4 @@
-// Authentication: password hashing, JWT tokens, and middleware.
+// Authentication: password hashing, JWT tokens, API key auth, and middleware.
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -12,6 +12,7 @@ use axum::{
 };
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use crate::db::Database;
@@ -82,9 +83,45 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
         .is_ok())
 }
 
+// ── API token helper ─────────────────────────────────────────────────
+
+/// Hash a raw API token with SHA-256 (same algorithm used in api/mod.rs).
+fn hash_api_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Try to authenticate via API token. Returns Claims if the token is valid.
+async fn try_api_token_auth(token: &str, parts: &Parts) -> Option<Claims> {
+    if !token.starts_with("infon_") {
+        return None;
+    }
+
+    let db = parts.extensions.get::<Arc<Database>>()?;
+    let token_hash = hash_api_token(token);
+
+    let api_token = db.get_api_token_by_hash(&token_hash).await.ok()??;
+
+    // Update last_used_at (fire-and-forget)
+    let _ = db.update_token_last_used(api_token.id).await;
+
+    // Look up the user to build Claims
+    let user = db.get_user(api_token.user_id).await.ok()??;
+
+    Some(Claims {
+        sub: user.id,
+        username: user.username,
+        role: user.role,
+        // API tokens don't expire via JWT, use a far-future expiry
+        exp: (chrono::Utc::now().timestamp() + 86400) as usize,
+    })
+}
+
 // ── Axum extractor: AuthUser ─────────────────────────────────────────
 
 /// Extracts the authenticated user from the Authorization header.
+/// Supports both JWT tokens and API keys (prefixed with "infon_").
 /// Usage: `AuthUser(claims)` in handler parameters.
 #[derive(Debug, Clone)]
 pub struct AuthUser(pub Claims);
@@ -114,18 +151,25 @@ where
             )
         })?;
 
-        let claims = verify_token(token).map_err(|e| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": e})),
-            )
-        })?;
+        // Try JWT first
+        if let Ok(claims) = verify_token(token) {
+            return Ok(AuthUser(claims));
+        }
 
-        Ok(AuthUser(claims))
+        // Fall back to API token auth
+        if let Some(claims) = try_api_token_auth(token, parts).await {
+            return Ok(AuthUser(claims));
+        }
+
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Invalid token"})),
+        ))
     }
 }
 
 /// Optional auth extractor – does not reject if no token is present.
+/// Supports both JWT tokens and API keys (prefixed with "infon_").
 #[derive(Debug, Clone)]
 pub struct OptionalAuthUser(pub Option<Claims>);
 
@@ -149,10 +193,17 @@ where
             return Ok(OptionalAuthUser(None));
         };
 
-        match verify_token(token) {
-            Ok(claims) => Ok(OptionalAuthUser(Some(claims))),
-            Err(_) => Ok(OptionalAuthUser(None)),
+        // Try JWT first
+        if let Ok(claims) = verify_token(token) {
+            return Ok(OptionalAuthUser(Some(claims)));
         }
+
+        // Fall back to API token auth
+        if let Some(claims) = try_api_token_auth(token, parts).await {
+            return Ok(OptionalAuthUser(Some(claims)));
+        }
+
+        Ok(OptionalAuthUser(None))
     }
 }
 
