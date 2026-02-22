@@ -64,14 +64,15 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
   const animFrameRef = useRef<number>(0);
   const [sidebarTab, setSidebarTab] = useState<'scores' | 'console'>('scores');
   const consoleLogRef = useRef<Map<number, string[]>>(new Map());
-  const [consoleVersion, setConsoleVersion] = useState(0);
-  const consoleEndRef = useRef<HTMLDivElement>(null);
+  const [consoleLogs, setConsoleLogs] = useState<Map<number, string[]>>(new Map());
+
 
   const spriteSheetRef = useRef<HTMLImageElement | null>(null);
   const spriteLoadedRef = useRef(false);
   const animTickRef = useRef(0);
   const lastAnimTimeRef = useRef(0);
   const creatureCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const drawRef = useRef<() => void>(() => {});
   const lastWorldRef = useRef<WorldMsg | null>(null);
 
   // Load sprite sheet
@@ -89,7 +90,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
     const world = worldRef.current;
     const snapshot = snapshotRef.current;
     if (!canvas || !world) {
-      animFrameRef.current = requestAnimationFrame(draw);
+      animFrameRef.current = requestAnimationFrame(drawRef.current);
       return;
     }
 
@@ -121,7 +122,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
       ctx.font = '16px monospace';
       ctx.textAlign = 'center';
       ctx.fillText('Loading sprites...', canvas.width / 2, canvas.height / 2);
-      animFrameRef.current = requestAnimationFrame(draw);
+      animFrameRef.current = requestAnimationFrame(drawRef.current);
       return;
     }
 
@@ -247,8 +248,9 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
       }
     }
 
-    animFrameRef.current = requestAnimationFrame(draw);
+    animFrameRef.current = requestAnimationFrame(drawRef.current);
   }, []);
+  useEffect(() => { drawRef.current = draw; }, [draw]);
 
   // WebSocket connection
   useEffect(() => {
@@ -280,7 +282,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
                   hasNew = true;
                 }
               }
-              if (hasNew) setConsoleVersion(v => v + 1);
+              if (hasNew) setConsoleLogs(new Map(consoleLogRef.current));
             }
             break;
           case 'game_end':
@@ -297,7 +299,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
 
   // Render loop
   useEffect(() => {
-    animFrameRef.current = requestAnimationFrame(draw);
+    animFrameRef.current = requestAnimationFrame(drawRef.current);
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [draw]);
 
@@ -415,12 +417,12 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
             </>
           ) : (
             // Console tab
-            <div key={consoleVersion}>
+            <div>
               {players.length === 0 ? (
                 <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
               ) : (
                 players.map(p => {
-                  const lines = consoleLogRef.current.get(p.id) || [];
+                  const lines = consoleLogs.get(p.id) || [];
                   return (
                     <div key={p.id} style={{ marginBottom: '12px' }}>
                       <div style={{

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Navigate } from 'react-router-dom';
-import { api, Team, TeamVersion, Bot, BotVersion } from '../api/client';
+import { api } from '../api/client';
+import type { Team, TeamVersion, Bot, BotVersion } from '../api/client';
 
 export function Teams() {
   const { user } = useAuth();

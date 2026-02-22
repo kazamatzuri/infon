@@ -452,7 +452,7 @@ A typical LLM-driven workflow:
 6. LLM polls for match result, analyzes replay data, iterates on bot code
 
 ---
-
+--------------------------------------
 ## Phase 9: Scaling & Large Games
 
 **Goal**: Optimize the engine for 20-player public games, with a path toward larger games if demand warrants it.

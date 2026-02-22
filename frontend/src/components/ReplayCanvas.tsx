@@ -46,7 +46,7 @@ interface ReplayCanvasProps {
   tickCount: number;
 }
 
-export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
+export function ReplayCanvas({ messages }: ReplayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const worldRef = useRef<WorldMsg | null>(null);
   const snapshotRef = useRef<SnapshotMsg | null>(null);
@@ -60,6 +60,7 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
   const animTickRef = useRef(0);
   const lastAnimTimeRef = useRef(0);
   const creatureCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const drawRef = useRef<() => void>(() => {});
   const lastWorldRef = useRef<WorldMsg | null>(null);
 
   // Playback state
@@ -90,14 +91,14 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
     img.src = '/sprites/theme.png';
   }, []);
 
-  // Apply messages up to the given index
-  const applyMessagesUpTo = useCallback((targetIndex: number) => {
-    // Always apply from the beginning to find the latest world and snapshot
+  // Apply messages when currentIndex changes
+  /* eslint-disable react-hooks/set-state-in-effect -- Replay scrubbing requires synchronous state derivation from message index */
+  useEffect(() => {
     worldRef.current = null;
     snapshotRef.current = null;
     setGameEnd(null);
 
-    for (let i = 0; i <= targetIndex && i < messages.length; i++) {
+    for (let i = 0; i <= currentIndex && i < messages.length; i++) {
       const msg = messages[i];
       switch (msg.type) {
         case 'world':
@@ -115,12 +116,8 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
           break;
       }
     }
-  }, [messages]);
-
-  // Apply messages when currentIndex changes
-  useEffect(() => {
-    applyMessagesUpTo(currentIndex);
-  }, [currentIndex, applyMessagesUpTo]);
+  }, [currentIndex, messages]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Playback timer
   useEffect(() => {
@@ -155,7 +152,7 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
     const world = worldRef.current;
     const snapshot = snapshotRef.current;
     if (!canvas || !world) {
-      animFrameRef.current = requestAnimationFrame(draw);
+      animFrameRef.current = requestAnimationFrame(drawRef.current);
       return;
     }
 
@@ -173,7 +170,7 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
       ctx.font = '16px monospace';
       ctx.textAlign = 'center';
       ctx.fillText('Loading sprites...', canvas.width / 2, canvas.height / 2);
-      animFrameRef.current = requestAnimationFrame(draw);
+      animFrameRef.current = requestAnimationFrame(drawRef.current);
       return;
     }
 
@@ -271,12 +268,13 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
       }
     }
 
-    animFrameRef.current = requestAnimationFrame(draw);
+    animFrameRef.current = requestAnimationFrame(drawRef.current);
   }, []);
+  useEffect(() => { drawRef.current = draw; }, [draw]);
 
   // Render loop
   useEffect(() => {
-    animFrameRef.current = requestAnimationFrame(draw);
+    animFrameRef.current = requestAnimationFrame(drawRef.current);
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [draw]);
 

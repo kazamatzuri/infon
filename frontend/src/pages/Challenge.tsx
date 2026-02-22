@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import type { Bot, BotVersion, MapInfo } from '../api/client';
+import type { Bot, BotVersion, MapInfo, ChallengeResult } from '../api/client';
 
 export function Challenge() {
   const { user } = useAuth();
@@ -31,7 +31,7 @@ export function Challenge() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ChallengeResult | null>(null);
 
   // Load initial data
   useEffect(() => {

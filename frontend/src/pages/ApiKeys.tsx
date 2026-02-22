@@ -50,8 +50,10 @@ export function ApiKeys() {
   }, []);
 
   useEffect(() => {
-    fetchKeys();
-  }, [fetchKeys]);
+    if (user) {
+      fetchKeys();
+    }
+  }, [user, fetchKeys]);
 
   if (!user) {
     return <Navigate to="/login" />;

@@ -131,3 +131,14 @@ local-validate-bots:
 # Install frontend dependencies locally
 local-install-frontend:
     npm --prefix frontend install
+
+# Run frontend e2e tests locally (requires backend + frontend running)
+local-test-e2e:
+    npm --prefix frontend run test:e2e
+
+# Run frontend e2e tests with UI
+local-test-e2e-ui:
+    npm --prefix frontend run test:e2e:ui
+
+# Run all local tests (backend unit + frontend e2e)
+local-test-all: local-test-backend local-test-e2e

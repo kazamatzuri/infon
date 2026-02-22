@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
 
 export interface AuthUser {
   id: number;
@@ -28,10 +29,10 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const savedToken = localStorage.getItem('infon_token');
+  const [isLoading, setIsLoading] = useState(!!savedToken);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('infon_token');
     if (savedToken) {
       fetch('/api/auth/me', {
         headers: { Authorization: `Bearer ${savedToken}` },
@@ -48,10 +49,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           localStorage.removeItem('infon_token');
         })
         .finally(() => setIsLoading(false));
-    } else {
-      setIsLoading(false);
     }
-  }, []);
+  }, [savedToken]);
 
   const login = (newToken: string, newUser: AuthUser) => {
     localStorage.setItem('infon_token', newToken);
@@ -72,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   return useContext(AuthContext);
 }

@@ -92,6 +92,20 @@ export interface MapInfo {
   description: string;
 }
 
+export interface ApiKey {
+  id: number;
+  name: string;
+  scopes: string;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface ChallengeResult {
+  match_id?: number;
+  id?: number;
+  status?: string;
+}
+
 export interface MatchDetail {
   match: {
     id: number;
@@ -385,15 +399,15 @@ export const api = {
     }).then(r => handleResponse<TeamVersion>(r)),
 
   // API Keys
-  listApiKeys: (): Promise<any[]> =>
-    fetch(`${BASE_URL}/api/api-keys`, { headers: authHeaders() }).then(r => handleResponse<any[]>(r)),
+  listApiKeys: (): Promise<ApiKey[]> =>
+    fetch(`${BASE_URL}/api/api-keys`, { headers: authHeaders() }).then(r => handleResponse<ApiKey[]>(r)),
 
-  createApiKey: (name: string, scopes?: string): Promise<any> =>
+  createApiKey: (name: string, scopes?: string): Promise<ApiKey & { token: string }> =>
     fetch(`${BASE_URL}/api/api-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ name, scopes }),
-    }).then(r => handleResponse<any>(r)),
+    }).then(r => handleResponse<ApiKey & { token: string }>(r)),
 
   deleteApiKey: (id: number): Promise<void> =>
     fetch(`${BASE_URL}/api/api-keys/${id}`, {
@@ -404,7 +418,7 @@ export const api = {
     }),
 
   // Challenges
-  createChallenge: (botVersionId: number, opponentBotVersionId: number, options?: { format?: string; headless?: boolean; map?: string }): Promise<any> =>
+  createChallenge: (botVersionId: number, opponentBotVersionId: number, options?: { format?: string; headless?: boolean; map?: string }): Promise<ChallengeResult> =>
     fetch(`${BASE_URL}/api/matches/challenge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -415,5 +429,5 @@ export const api = {
         headless: options?.headless,
         map: options?.map,
       }),
-    }).then(r => handleResponse<any>(r)),
+    }).then(r => handleResponse<ChallengeResult>(r)),
 };
