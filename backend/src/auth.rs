@@ -32,6 +32,8 @@ pub struct Claims {
     pub username: String,
     pub role: String,
     pub exp: usize, // expiry (unix timestamp)
+    #[serde(default)]
+    pub scopes: Option<String>, // None for JWT auth, Some("bots:read,...") for API tokens
 }
 
 pub fn create_token(user_id: i64, username: &str, role: &str) -> Result<String, String> {
@@ -45,6 +47,7 @@ pub fn create_token(user_id: i64, username: &str, role: &str) -> Result<String, 
         username: username.to_string(),
         role: role.to_string(),
         exp: expiration,
+        scopes: None,
     };
 
     encode(
@@ -63,6 +66,15 @@ pub fn verify_token(token: &str) -> Result<Claims, String> {
     )
     .map(|data| data.claims)
     .map_err(|e| format!("Invalid token: {e}"))
+}
+
+/// Check whether the given claims include a required scope.
+/// JWT tokens (scopes == None) have full access; API tokens must list the scope.
+pub fn has_scope(claims: &Claims, required: &str) -> bool {
+    match &claims.scopes {
+        None => true, // JWT tokens have full access
+        Some(scopes) => scopes.split(',').any(|s| s.trim() == required),
+    }
 }
 
 // ── Password hashing ─────────────────────────────────────────────────
@@ -115,6 +127,7 @@ async fn try_api_token_auth(token: &str, parts: &Parts) -> Option<Claims> {
         role: user.role,
         // API tokens don't expire via JWT, use a far-future expiry
         exp: (chrono::Utc::now().timestamp() + 86400) as usize,
+        scopes: Some(api_token.scopes.clone()),
     })
 }
 
@@ -509,5 +522,31 @@ mod tests {
     #[test]
     fn test_jwt_invalid_token() {
         assert!(verify_token("invalid.token.here").is_err());
+    }
+
+    #[test]
+    fn test_jwt_claims_have_no_scopes() {
+        let token = create_token(1, "testuser", "user").unwrap();
+        let claims = verify_token(&token).unwrap();
+        assert!(claims.scopes.is_none());
+        // JWT tokens (no scopes) have full access
+        assert!(has_scope(&claims, "bots:write"));
+        assert!(has_scope(&claims, "matches:write"));
+    }
+
+    #[test]
+    fn test_has_scope_with_api_token_scopes() {
+        let claims = Claims {
+            sub: 1,
+            username: "testuser".to_string(),
+            role: "user".to_string(),
+            exp: 9999999999,
+            scopes: Some("bots:read,matches:read,leaderboard:read".to_string()),
+        };
+        assert!(has_scope(&claims, "bots:read"));
+        assert!(has_scope(&claims, "matches:read"));
+        assert!(has_scope(&claims, "leaderboard:read"));
+        assert!(!has_scope(&claims, "bots:write"));
+        assert!(!has_scope(&claims, "matches:write"));
     }
 }

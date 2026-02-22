@@ -1073,6 +1073,9 @@ async fn create_challenge(
     auth: AuthUser,
     Json(req): Json<ChallengeRequest>,
 ) -> impl IntoResponse {
+    if !crate::auth::has_scope(&auth.0, "matches:write") {
+        return json_error(StatusCode::FORBIDDEN, "Insufficient API token scope").into_response();
+    }
     let user_id = auth.0.sub;
     let headless = req.headless.unwrap_or(false);
     let format = req.format.clone().unwrap_or_else(|| "1v1".to_string());
@@ -1155,8 +1158,6 @@ async fn create_challenge(
     }
 
     if headless {
-        // TODO: Run headless game in background thread
-        // For now, just queue it
         state.game_queue.enqueue(crate::queue::QueueEntry {
             match_id: m.id,
             players: vec![
@@ -1300,6 +1301,9 @@ async fn create_team(
     auth: AuthUser,
     Json(req): Json<CreateTeamRequest>,
 ) -> impl IntoResponse {
+    if !crate::auth::has_scope(&auth.0, "teams:write") {
+        return json_error(StatusCode::FORBIDDEN, "Insufficient API token scope").into_response();
+    }
     if req.name.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
     }
@@ -1475,6 +1479,9 @@ async fn create_api_key(
     auth: AuthUser,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> impl IntoResponse {
+    if !crate::auth::has_scope(&auth.0, "api_keys:write") {
+        return json_error(StatusCode::FORBIDDEN, "Insufficient API token scope").into_response();
+    }
     if req.name.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
     }
