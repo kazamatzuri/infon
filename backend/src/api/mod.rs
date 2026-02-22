@@ -6,7 +6,7 @@ use axum::{
     extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde::Deserialize;
@@ -64,6 +64,16 @@ pub struct StartGamePlayer {
     pub name: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct SetActiveVersionRequest {
+    pub version_id: i64,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateBotVersionRequest {
+    pub is_archived: Option<bool>,
+}
+
 // ── Shared application state ─────────────────────────────────────────
 
 #[derive(Clone)]
@@ -110,8 +120,12 @@ pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
         )
         .route(
             "/api/bots/{bot_id}/versions/{version_id}",
-            get(get_bot_version),
+            get(get_bot_version).put(update_bot_version),
         )
+        .route("/api/bots/{id}/active-version", put(set_active_version))
+        .route("/api/bots/{id}/stats", get(get_bot_stats))
+        // Matches
+        .route("/api/matches/{id}", get(get_match))
         // Tournaments
         .route(
             "/api/tournaments",
@@ -250,6 +264,123 @@ async fn get_bot_version(
         Ok(None) => json_error(StatusCode::NOT_FOUND, "Bot version not found").into_response(),
         Err(e) => internal_error(e).into_response(),
     }
+}
+
+// ── Bot version management handlers ──────────────────────────────────
+
+async fn update_bot_version(
+    State(state): State<AppState>,
+    Path((_bot_id, version_id)): Path<(i64, i64)>,
+    Json(req): Json<UpdateBotVersionRequest>,
+) -> impl IntoResponse {
+    if let Some(archived) = req.is_archived {
+        match state.db.archive_version(version_id, archived).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return json_error(StatusCode::NOT_FOUND, "Version not found").into_response()
+            }
+            Err(e) => return internal_error(e).into_response(),
+        }
+    }
+    match state.db.get_bot_version_by_id(version_id).await {
+        Ok(Some(v)) => (StatusCode::OK, Json(json!(v))).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Version not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn set_active_version(
+    State(state): State<AppState>,
+    Path(bot_id): Path<i64>,
+    Json(req): Json<SetActiveVersionRequest>,
+) -> impl IntoResponse {
+    // Verify the version belongs to this bot
+    match state.db.get_bot_version(bot_id, req.version_id).await {
+        Ok(None) => {
+            return json_error(StatusCode::NOT_FOUND, "Version not found for this bot")
+                .into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match state.db.set_active_version(bot_id, req.version_id).await {
+        Ok(true) => match state.db.get_bot(bot_id).await {
+            Ok(Some(bot)) => (StatusCode::OK, Json(json!(bot))).into_response(),
+            _ => StatusCode::OK.into_response(),
+        },
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn get_bot_stats(
+    State(state): State<AppState>,
+    Path(bot_id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.list_bot_versions(bot_id).await {
+        Ok(versions) => {
+            let stats: Vec<serde_json::Value> = versions
+                .iter()
+                .map(|v| {
+                    json!({
+                        "version_id": v.id,
+                        "version": v.version,
+                        "elo_rating": v.elo_rating,
+                        "elo_1v1": v.elo_1v1,
+                        "elo_peak": v.elo_peak,
+                        "games_played": v.games_played,
+                        "wins": v.wins,
+                        "losses": v.losses,
+                        "draws": v.draws,
+                        "win_rate": if v.games_played > 0 {
+                            v.wins as f64 / v.games_played as f64
+                        } else {
+                            0.0
+                        },
+                        "ffa_placement_points": v.ffa_placement_points,
+                        "ffa_games": v.ffa_games,
+                        "avg_ffa_placement": if v.ffa_games > 0 {
+                            v.ffa_placement_points as f64 / v.ffa_games as f64
+                        } else {
+                            0.0
+                        },
+                        "creatures_spawned": v.creatures_spawned,
+                        "creatures_killed": v.creatures_killed,
+                        "creatures_lost": v.creatures_lost,
+                        "total_score": v.total_score,
+                        "avg_score": if v.games_played > 0 {
+                            v.total_score as f64 / v.games_played as f64
+                        } else {
+                            0.0
+                        },
+                        "is_archived": v.is_archived,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!(stats))).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn get_match(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+    let m = match state.db.get_match(id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Match not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    };
+    let participants = match state.db.get_match_participants(id).await {
+        Ok(p) => p,
+        Err(e) => return internal_error(e).into_response(),
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "match": m,
+            "participants": participants,
+        })),
+    )
+        .into_response()
 }
 
 // ── Tournament handlers ───────────────────────────────────────────────

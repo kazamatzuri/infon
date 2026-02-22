@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod db;
+mod elo;
 mod engine;
 
 use axum::{

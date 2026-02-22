@@ -24,6 +24,7 @@ pub struct Bot {
     pub description: String,
     pub owner_id: Option<i64>,
     pub visibility: String,
+    pub active_version_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -35,7 +36,47 @@ pub struct BotVersion {
     pub version: i32,
     pub code: String,
     pub api_type: String,
+    pub is_archived: bool,
+    pub elo_rating: i32,
+    pub elo_1v1: i32,
+    pub elo_peak: i32,
+    pub games_played: i32,
+    pub wins: i32,
+    pub losses: i32,
+    pub draws: i32,
+    pub ffa_placement_points: i32,
+    pub ffa_games: i32,
+    pub creatures_spawned: i32,
+    pub creatures_killed: i32,
+    pub creatures_lost: i32,
+    pub total_score: i64,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Match {
+    pub id: i64,
+    pub format: String,
+    pub map: String,
+    pub status: String,
+    pub winner_bot_version_id: Option<i64>,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MatchParticipant {
+    pub id: i64,
+    pub match_id: i64,
+    pub bot_version_id: i64,
+    pub player_slot: i32,
+    pub final_score: i32,
+    pub placement: Option<i32>,
+    pub elo_before: Option<i32>,
+    pub elo_after: Option<i32>,
+    pub creatures_spawned: i32,
+    pub creatures_killed: i32,
+    pub creatures_lost: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -113,6 +154,7 @@ impl Database {
                 description TEXT NOT NULL DEFAULT '',
                 owner_id INTEGER REFERENCES users(id),
                 visibility TEXT NOT NULL DEFAULT 'public',
+                active_version_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -121,7 +163,7 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        // Add owner_id and visibility columns to existing bots table if missing
+        // Add columns to existing bots table if missing
         let _ = sqlx::query("ALTER TABLE bots ADD COLUMN owner_id INTEGER REFERENCES users(id)")
             .execute(&self.pool)
             .await;
@@ -129,6 +171,9 @@ impl Database {
             sqlx::query("ALTER TABLE bots ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
                 .execute(&self.pool)
                 .await;
+        let _ = sqlx::query("ALTER TABLE bots ADD COLUMN active_version_id INTEGER")
+            .execute(&self.pool)
+            .await;
 
         sqlx::query(
             r#"
@@ -138,8 +183,81 @@ impl Database {
                 version INTEGER NOT NULL,
                 code TEXT NOT NULL,
                 api_type TEXT NOT NULL DEFAULT 'oo',
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                elo_rating INTEGER NOT NULL DEFAULT 1500,
+                elo_1v1 INTEGER NOT NULL DEFAULT 1500,
+                elo_peak INTEGER NOT NULL DEFAULT 1500,
+                games_played INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                draws INTEGER NOT NULL DEFAULT 0,
+                ffa_placement_points INTEGER NOT NULL DEFAULT 0,
+                ffa_games INTEGER NOT NULL DEFAULT 0,
+                creatures_spawned INTEGER NOT NULL DEFAULT 0,
+                creatures_killed INTEGER NOT NULL DEFAULT 0,
+                creatures_lost INTEGER NOT NULL DEFAULT 0,
+                total_score INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(bot_id, version)
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Add new columns to existing bot_versions if missing
+        for col in &[
+            "is_archived INTEGER NOT NULL DEFAULT 0",
+            "elo_rating INTEGER NOT NULL DEFAULT 1500",
+            "elo_1v1 INTEGER NOT NULL DEFAULT 1500",
+            "elo_peak INTEGER NOT NULL DEFAULT 1500",
+            "games_played INTEGER NOT NULL DEFAULT 0",
+            "wins INTEGER NOT NULL DEFAULT 0",
+            "losses INTEGER NOT NULL DEFAULT 0",
+            "draws INTEGER NOT NULL DEFAULT 0",
+            "ffa_placement_points INTEGER NOT NULL DEFAULT 0",
+            "ffa_games INTEGER NOT NULL DEFAULT 0",
+            "creatures_spawned INTEGER NOT NULL DEFAULT 0",
+            "creatures_killed INTEGER NOT NULL DEFAULT 0",
+            "creatures_lost INTEGER NOT NULL DEFAULT 0",
+            "total_score INTEGER NOT NULL DEFAULT 0",
+        ] {
+            let _ = sqlx::query(&format!("ALTER TABLE bot_versions ADD COLUMN {col}"))
+                .execute(&self.pool)
+                .await;
+        }
+
+        // Matches table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                format TEXT NOT NULL DEFAULT '1v1',
+                map TEXT NOT NULL DEFAULT 'random',
+                status TEXT NOT NULL DEFAULT 'pending',
+                winner_bot_version_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                finished_at TEXT
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS match_participants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                bot_version_id INTEGER NOT NULL REFERENCES bot_versions(id),
+                player_slot INTEGER NOT NULL,
+                final_score INTEGER NOT NULL DEFAULT 0,
+                placement INTEGER,
+                elo_before INTEGER,
+                elo_after INTEGER,
+                creatures_spawned INTEGER NOT NULL DEFAULT 0,
+                creatures_killed INTEGER NOT NULL DEFAULT 0,
+                creatures_lost INTEGER NOT NULL DEFAULT 0
             )
         "#,
         )
@@ -266,7 +384,7 @@ impl Database {
         owner_id: Option<i64>,
     ) -> Result<Bot, sqlx::Error> {
         let row = sqlx::query_as::<_, Bot>(
-            "INSERT INTO bots (name, description, owner_id) VALUES (?, ?, ?) RETURNING id, name, description, owner_id, visibility, created_at, updated_at",
+            "INSERT INTO bots (name, description, owner_id) VALUES (?, ?, ?) RETURNING id, name, description, owner_id, visibility, active_version_id, created_at, updated_at",
         )
         .bind(name)
         .bind(description)
@@ -278,7 +396,7 @@ impl Database {
 
     pub async fn list_bots(&self) -> Result<Vec<Bot>, sqlx::Error> {
         let rows =
-            sqlx::query_as::<_, Bot>("SELECT id, name, description, owner_id, visibility, created_at, updated_at FROM bots ORDER BY id")
+            sqlx::query_as::<_, Bot>("SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots ORDER BY id")
                 .fetch_all(&self.pool)
                 .await?;
         Ok(rows)
@@ -286,7 +404,7 @@ impl Database {
 
     pub async fn list_bots_by_owner(&self, owner_id: i64) -> Result<Vec<Bot>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Bot>(
-            "SELECT id, name, description, owner_id, visibility, created_at, updated_at FROM bots WHERE owner_id = ? ORDER BY id",
+            "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE owner_id = ? ORDER BY id",
         )
         .bind(owner_id)
         .fetch_all(&self.pool)
@@ -296,7 +414,7 @@ impl Database {
 
     pub async fn get_bot(&self, id: i64) -> Result<Option<Bot>, sqlx::Error> {
         let row = sqlx::query_as::<_, Bot>(
-            "SELECT id, name, description, owner_id, visibility, created_at, updated_at FROM bots WHERE id = ?",
+            "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -371,7 +489,7 @@ impl Database {
         let next_version = max_version.unwrap_or(0) + 1;
 
         let row = sqlx::query_as::<_, BotVersion>(
-            "INSERT INTO bot_versions (bot_id, version, code, api_type) VALUES (?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, created_at",
+            "INSERT INTO bot_versions (bot_id, version, code, api_type) VALUES (?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
         )
         .bind(bot_id)
         .bind(next_version)
@@ -384,7 +502,7 @@ impl Database {
 
     pub async fn list_bot_versions(&self, bot_id: i64) -> Result<Vec<BotVersion>, sqlx::Error> {
         let rows = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, created_at FROM bot_versions WHERE bot_id = ? ORDER BY version",
+            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = ? ORDER BY version",
         )
         .bind(bot_id)
         .fetch_all(&self.pool)
@@ -398,7 +516,7 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, created_at FROM bot_versions WHERE bot_id = ? AND id = ?",
+            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = ? AND id = ?",
         )
         .bind(bot_id)
         .bind(version_id)
@@ -413,12 +531,215 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, created_at FROM bot_versions WHERE id = ?",
+            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE id = ?",
         )
         .bind(version_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    // ── Bot Version Management ──────────────────────────────────────
+
+    pub async fn set_active_version(
+        &self,
+        bot_id: i64,
+        version_id: i64,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bots SET active_version_id = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(version_id)
+        .bind(bot_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn archive_version(
+        &self,
+        version_id: i64,
+        archived: bool,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("UPDATE bot_versions SET is_archived = ? WHERE id = ?")
+            .bind(archived)
+            .bind(version_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_active_version(&self, bot_id: i64) -> Result<Option<BotVersion>, sqlx::Error> {
+        let row = sqlx::query_as::<_, BotVersion>(
+            "SELECT bv.id, bv.bot_id, bv.version, bv.code, bv.api_type, bv.is_archived, bv.elo_rating, bv.elo_1v1, bv.elo_peak, bv.games_played, bv.wins, bv.losses, bv.draws, bv.ffa_placement_points, bv.ffa_games, bv.creatures_spawned, bv.creatures_killed, bv.creatures_lost, bv.total_score, bv.created_at FROM bot_versions bv JOIN bots b ON b.active_version_id = bv.id WHERE b.id = ?",
+        )
+        .bind(bot_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    // ── Match Recording ──────────────────────────────────────────────
+
+    pub async fn create_match(&self, format: &str, map: &str) -> Result<Match, sqlx::Error> {
+        let row = sqlx::query_as::<_, Match>(
+            "INSERT INTO matches (format, map, status) VALUES (?, ?, 'running') RETURNING id, format, map, status, winner_bot_version_id, created_at, finished_at",
+        )
+        .bind(format)
+        .bind(map)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn finish_match(
+        &self,
+        match_id: i64,
+        winner_bot_version_id: Option<i64>,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE matches SET status = 'finished', winner_bot_version_id = ?, finished_at = datetime('now') WHERE id = ?",
+        )
+        .bind(winner_bot_version_id)
+        .bind(match_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_match(&self, id: i64) -> Result<Option<Match>, sqlx::Error> {
+        let row = sqlx::query_as::<_, Match>(
+            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn add_match_participant(
+        &self,
+        match_id: i64,
+        bot_version_id: i64,
+        player_slot: i32,
+    ) -> Result<MatchParticipant, sqlx::Error> {
+        let row = sqlx::query_as::<_, MatchParticipant>(
+            "INSERT INTO match_participants (match_id, bot_version_id, player_slot) VALUES (?, ?, ?) RETURNING id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost",
+        )
+        .bind(match_id)
+        .bind(bot_version_id)
+        .bind(player_slot)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_match_participant(
+        &self,
+        participant_id: i64,
+        final_score: i32,
+        placement: Option<i32>,
+        elo_before: Option<i32>,
+        elo_after: Option<i32>,
+        creatures_spawned: i32,
+        creatures_killed: i32,
+        creatures_lost: i32,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE match_participants SET final_score = ?, placement = ?, elo_before = ?, elo_after = ?, creatures_spawned = ?, creatures_killed = ?, creatures_lost = ? WHERE id = ?",
+        )
+        .bind(final_score)
+        .bind(placement)
+        .bind(elo_before)
+        .bind(elo_after)
+        .bind(creatures_spawned)
+        .bind(creatures_killed)
+        .bind(creatures_lost)
+        .bind(participant_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_match_participants(
+        &self,
+        match_id: i64,
+    ) -> Result<Vec<MatchParticipant>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, MatchParticipant>(
+            "SELECT id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost FROM match_participants WHERE match_id = ? ORDER BY player_slot",
+        )
+        .bind(match_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    // ── Elo & Stats Updates ──────────────────────────────────────────
+
+    pub async fn update_version_elo(
+        &self,
+        version_id: i64,
+        new_elo: i32,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bot_versions SET elo_rating = ?, elo_1v1 = ?, elo_peak = MAX(elo_peak, ?) WHERE id = ?",
+        )
+        .bind(new_elo)
+        .bind(new_elo)
+        .bind(new_elo)
+        .bind(version_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_version_stats(
+        &self,
+        version_id: i64,
+        won: bool,
+        lost: bool,
+        draw: bool,
+        score: i32,
+        spawned: i32,
+        killed: i32,
+        died: i32,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bot_versions SET games_played = games_played + 1, wins = wins + ?, losses = losses + ?, draws = draws + ?, total_score = total_score + ?, creatures_spawned = creatures_spawned + ?, creatures_killed = creatures_killed + ?, creatures_lost = creatures_lost + ? WHERE id = ?",
+        )
+        .bind(won as i32)
+        .bind(lost as i32)
+        .bind(draw as i32)
+        .bind(score as i64)
+        .bind(spawned)
+        .bind(killed)
+        .bind(died)
+        .bind(version_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_version_ffa_stats(
+        &self,
+        version_id: i64,
+        placement_points: i32,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bot_versions SET ffa_games = ffa_games + 1, ffa_placement_points = ffa_placement_points + ? WHERE id = ?",
+        )
+        .bind(placement_points)
+        .bind(version_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_bot_version_stats(
+        &self,
+        version_id: i64,
+    ) -> Result<Option<BotVersion>, sqlx::Error> {
+        self.get_bot_version_by_id(version_id).await
     }
 
     // ── Tournament CRUD ───────────────────────────────────────────────
@@ -748,5 +1069,101 @@ mod tests {
 
         let entries = db.list_tournament_entries(t.id).await.unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_bot_version_elo_and_stats() {
+        let db = test_db().await;
+
+        let bot = db.create_bot("EloBot", "", None).await.unwrap();
+        let v = db.create_bot_version(bot.id, "code", "oo").await.unwrap();
+
+        assert_eq!(v.elo_rating, 1500);
+        assert_eq!(v.games_played, 0);
+
+        db.update_version_elo(v.id, 1520).await.unwrap();
+        db.update_version_stats(v.id, true, false, false, 100, 5, 3, 2)
+            .await
+            .unwrap();
+
+        let updated = db.get_bot_version_by_id(v.id).await.unwrap().unwrap();
+        assert_eq!(updated.elo_rating, 1520);
+        assert_eq!(updated.elo_peak, 1520);
+        assert_eq!(updated.games_played, 1);
+        assert_eq!(updated.wins, 1);
+        assert_eq!(updated.losses, 0);
+        assert_eq!(updated.total_score, 100);
+        assert_eq!(updated.creatures_spawned, 5);
+        assert_eq!(updated.creatures_killed, 3);
+        assert_eq!(updated.creatures_lost, 2);
+    }
+
+    #[tokio::test]
+    async fn test_active_version() {
+        let db = test_db().await;
+
+        let bot = db.create_bot("ActiveBot", "", None).await.unwrap();
+        assert!(bot.active_version_id.is_none());
+
+        let v1 = db.create_bot_version(bot.id, "v1", "oo").await.unwrap();
+        db.set_active_version(bot.id, v1.id).await.unwrap();
+
+        let bot = db.get_bot(bot.id).await.unwrap().unwrap();
+        assert_eq!(bot.active_version_id, Some(v1.id));
+
+        let active = db.get_active_version(bot.id).await.unwrap();
+        assert!(active.is_some());
+        assert_eq!(active.unwrap().id, v1.id);
+    }
+
+    #[tokio::test]
+    async fn test_version_archiving() {
+        let db = test_db().await;
+
+        let bot = db.create_bot("ArchiveBot", "", None).await.unwrap();
+        let v = db.create_bot_version(bot.id, "code", "oo").await.unwrap();
+        assert!(!v.is_archived);
+
+        db.archive_version(v.id, true).await.unwrap();
+        let archived = db.get_bot_version_by_id(v.id).await.unwrap().unwrap();
+        assert!(archived.is_archived);
+
+        db.archive_version(v.id, false).await.unwrap();
+        let unarchived = db.get_bot_version_by_id(v.id).await.unwrap().unwrap();
+        assert!(!unarchived.is_archived);
+    }
+
+    #[tokio::test]
+    async fn test_match_recording() {
+        let db = test_db().await;
+
+        let bot = db.create_bot("MatchBot", "", None).await.unwrap();
+        let v1 = db.create_bot_version(bot.id, "code1", "oo").await.unwrap();
+        let v2 = db.create_bot_version(bot.id, "code2", "oo").await.unwrap();
+
+        let m = db.create_match("1v1", "random").await.unwrap();
+        assert_eq!(m.format, "1v1");
+        assert_eq!(m.status, "running");
+
+        let p1 = db.add_match_participant(m.id, v1.id, 0).await.unwrap();
+        let p2 = db.add_match_participant(m.id, v2.id, 1).await.unwrap();
+
+        db.update_match_participant(p1.id, 150, Some(1), Some(1500), Some(1520), 10, 5, 3)
+            .await
+            .unwrap();
+        db.update_match_participant(p2.id, 80, Some(2), Some(1500), Some(1480), 8, 3, 5)
+            .await
+            .unwrap();
+
+        db.finish_match(m.id, Some(v1.id)).await.unwrap();
+
+        let finished = db.get_match(m.id).await.unwrap().unwrap();
+        assert_eq!(finished.status, "finished");
+        assert_eq!(finished.winner_bot_version_id, Some(v1.id));
+
+        let participants = db.get_match_participants(m.id).await.unwrap();
+        assert_eq!(participants.len(), 2);
+        assert_eq!(participants[0].final_score, 150);
+        assert_eq!(participants[1].final_score, 80);
     }
 }
