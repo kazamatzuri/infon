@@ -126,6 +126,14 @@ pub struct TournamentResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TournamentMatch {
+    pub id: i64,
+    pub tournament_id: i64,
+    pub match_id: i64,
+    pub round: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct LeaderboardEntry {
     pub rank: i64,
     pub bot_version_id: i64,
@@ -387,6 +395,20 @@ impl Database {
                 creatures_killed INTEGER NOT NULL DEFAULT 0,
                 creatures_lost INTEGER NOT NULL DEFAULT 0,
                 finished_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Tournament-Match linking table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tournament_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                round INTEGER NOT NULL DEFAULT 1
             )
         "#,
         )
@@ -1156,6 +1178,67 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    // ── Tournament-Match Linking ────────────────────────────────────
+
+    pub async fn add_tournament_match(
+        &self,
+        tournament_id: i64,
+        match_id: i64,
+        round: i32,
+    ) -> Result<TournamentMatch, sqlx::Error> {
+        let row = sqlx::query_as::<_, TournamentMatch>(
+            "INSERT INTO tournament_matches (tournament_id, match_id, round) VALUES (?, ?, ?) RETURNING id, tournament_id, match_id, round",
+        )
+        .bind(tournament_id)
+        .bind(match_id)
+        .bind(round)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_tournament_matches(
+        &self,
+        tournament_id: i64,
+    ) -> Result<Vec<TournamentMatch>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, TournamentMatch>(
+            "SELECT id, tournament_id, match_id, round FROM tournament_matches WHERE tournament_id = ? ORDER BY round, id",
+        )
+        .bind(tournament_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn list_tournament_matches_by_round(
+        &self,
+        tournament_id: i64,
+        round: i32,
+    ) -> Result<Vec<TournamentMatch>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, TournamentMatch>(
+            "SELECT id, tournament_id, match_id, round FROM tournament_matches WHERE tournament_id = ? AND round = ? ORDER BY id",
+        )
+        .bind(tournament_id)
+        .bind(round)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Returns (tournament_id, round) for a match if it belongs to a tournament.
+    pub async fn get_tournament_for_match(
+        &self,
+        match_id: i64,
+    ) -> Result<Option<(i64, i32)>, sqlx::Error> {
+        let row = sqlx::query_as::<_, (i64, i32)>(
+            "SELECT tournament_id, round FROM tournament_matches WHERE match_id = ? LIMIT 1",
+        )
+        .bind(match_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
     }
 
     // ── Leaderboards ─────────────────────────────────────────────────
@@ -2207,5 +2290,62 @@ mod tests {
             .await
             .unwrap();
         assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_tournament_matches_linking() {
+        let db = test_db().await;
+
+        let t = db
+            .create_tournament("LinkedTourney", "default")
+            .await
+            .unwrap();
+
+        // Create some matches
+        let m1 = db.create_match("1v1", "default").await.unwrap();
+        let m2 = db.create_match("1v1", "default").await.unwrap();
+        let m3 = db.create_match("1v1", "default").await.unwrap();
+
+        // Link matches to tournament rounds
+        let tm1 = db.add_tournament_match(t.id, m1.id, 1).await.unwrap();
+        assert_eq!(tm1.tournament_id, t.id);
+        assert_eq!(tm1.match_id, m1.id);
+        assert_eq!(tm1.round, 1);
+
+        let _tm2 = db.add_tournament_match(t.id, m2.id, 1).await.unwrap();
+        let _tm3 = db.add_tournament_match(t.id, m3.id, 2).await.unwrap();
+
+        // List all tournament matches
+        let all = db.list_tournament_matches(t.id).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        // List by round
+        let round1 = db.list_tournament_matches_by_round(t.id, 1).await.unwrap();
+        assert_eq!(round1.len(), 2);
+        assert_eq!(round1[0].match_id, m1.id);
+        assert_eq!(round1[1].match_id, m2.id);
+
+        let round2 = db.list_tournament_matches_by_round(t.id, 2).await.unwrap();
+        assert_eq!(round2.len(), 1);
+        assert_eq!(round2[0].match_id, m3.id);
+
+        // Empty round
+        let round3 = db.list_tournament_matches_by_round(t.id, 3).await.unwrap();
+        assert!(round3.is_empty());
+
+        // Get tournament for match
+        let result = db.get_tournament_for_match(m1.id).await.unwrap();
+        assert!(result.is_some());
+        let (tid, round) = result.unwrap();
+        assert_eq!(tid, t.id);
+        assert_eq!(round, 1);
+
+        let result3 = db.get_tournament_for_match(m3.id).await.unwrap();
+        assert_eq!(result3, Some((t.id, 2)));
+
+        // Non-tournament match returns None
+        let m4 = db.create_match("1v1", "default").await.unwrap();
+        let no_tournament = db.get_tournament_for_match(m4.id).await.unwrap();
+        assert!(no_tournament.is_none());
     }
 }

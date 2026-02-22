@@ -166,6 +166,7 @@ pub fn spawn_queue_worker(
                 entry.match_id,
                 version_ids.clone(),
                 format,
+                game_queue.clone(),
             );
 
             let max_ticks = if entry.headless { Some(6000) } else { None };
