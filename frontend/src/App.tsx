@@ -7,6 +7,7 @@ import { TournamentDetail } from './pages/TournamentDetail';
 import { GameViewer } from './pages/GameViewer';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { Leaderboard } from './pages/Leaderboard';
 import './App.css';
 
 function NavBar() {
@@ -17,6 +18,7 @@ function NavBar() {
       <h1 className="app-title">Infon Arena</h1>
       <NavLink to="/" end className={navLinkClass}>Bot Library</NavLink>
       <NavLink to="/editor" className={navLinkClass}>Editor</NavLink>
+      <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
       <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
       <NavLink to="/game" className={navLinkClass}>Game</NavLink>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -49,6 +51,7 @@ function App() {
               <Route path="/" element={<BotLibrary />} />
               <Route path="/editor" element={<BotEditor />} />
               <Route path="/editor/:botId" element={<BotEditor />} />
+              <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/tournaments" element={<TournamentList />} />
               <Route path="/tournaments/:id" element={<TournamentDetail />} />
               <Route path="/game" element={<GameViewer />} />

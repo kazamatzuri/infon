@@ -110,6 +110,43 @@ pub struct TournamentResult {
     pub finished_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct LeaderboardEntry {
+    pub rank: i64,
+    pub bot_version_id: i64,
+    pub bot_name: String,
+    pub version: i32,
+    pub owner_username: String,
+    pub rating: i32,
+    pub games_played: i32,
+    pub wins: i32,
+    pub losses: i32,
+    pub win_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Team {
+    pub id: i64,
+    pub owner_id: i64,
+    pub name: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TeamVersion {
+    pub id: i64,
+    pub team_id: i64,
+    pub version: i32,
+    pub bot_version_a: i64,
+    pub bot_version_b: i64,
+    pub elo_rating: i32,
+    pub games_played: i32,
+    pub wins: i32,
+    pub losses: i32,
+    pub draws: i32,
+    pub created_at: String,
+}
+
 pub struct Database {
     pool: SqlitePool,
 }
@@ -304,6 +341,41 @@ impl Database {
                 creatures_killed INTEGER NOT NULL DEFAULT 0,
                 creatures_lost INTEGER NOT NULL DEFAULT 0,
                 finished_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Teams table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS team_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                version INTEGER NOT NULL,
+                bot_version_a INTEGER NOT NULL REFERENCES bot_versions(id),
+                bot_version_b INTEGER NOT NULL REFERENCES bot_versions(id),
+                elo_rating INTEGER NOT NULL DEFAULT 1500,
+                games_played INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                draws INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(team_id, version)
             )
         "#,
         )
@@ -870,6 +942,195 @@ impl Database {
         .await?;
         Ok(rows)
     }
+
+    // ── Leaderboards ─────────────────────────────────────────────────
+
+    pub async fn leaderboard_1v1(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, LeaderboardEntry>(
+            r#"
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY bv.elo_1v1 DESC) AS rank,
+                bv.id AS bot_version_id,
+                b.name AS bot_name,
+                bv.version,
+                COALESCE(u.username, 'anonymous') AS owner_username,
+                bv.elo_1v1 AS rating,
+                bv.games_played,
+                bv.wins,
+                bv.losses,
+                CASE WHEN bv.games_played > 0
+                    THEN CAST(bv.wins AS REAL) / bv.games_played
+                    ELSE 0.0
+                END AS win_rate
+            FROM bot_versions bv
+            JOIN bots b ON b.id = bv.bot_id
+            LEFT JOIN users u ON u.id = b.owner_id
+            WHERE bv.is_archived = 0 AND bv.games_played > 0
+            ORDER BY bv.elo_1v1 DESC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn leaderboard_ffa(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, LeaderboardEntry>(
+            r#"
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY bv.ffa_placement_points DESC) AS rank,
+                bv.id AS bot_version_id,
+                b.name AS bot_name,
+                bv.version,
+                COALESCE(u.username, 'anonymous') AS owner_username,
+                bv.ffa_placement_points AS rating,
+                bv.games_played,
+                bv.wins,
+                bv.losses,
+                CASE WHEN bv.games_played > 0
+                    THEN CAST(bv.wins AS REAL) / bv.games_played
+                    ELSE 0.0
+                END AS win_rate
+            FROM bot_versions bv
+            JOIN bots b ON b.id = bv.bot_id
+            LEFT JOIN users u ON u.id = b.owner_id
+            WHERE bv.is_archived = 0 AND bv.games_played > 0
+            ORDER BY bv.ffa_placement_points DESC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    // ── Team CRUD ─────────────────────────────────────────────────────
+
+    pub async fn create_team(&self, owner_id: i64, name: &str) -> Result<Team, sqlx::Error> {
+        let row = sqlx::query_as::<_, Team>(
+            "INSERT INTO teams (owner_id, name) VALUES (?, ?) RETURNING id, owner_id, name, created_at",
+        )
+        .bind(owner_id)
+        .bind(name)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_teams_by_owner(&self, owner_id: i64) -> Result<Vec<Team>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Team>(
+            "SELECT id, owner_id, name, created_at FROM teams WHERE owner_id = ? ORDER BY id",
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_team(&self, id: i64) -> Result<Option<Team>, sqlx::Error> {
+        let row = sqlx::query_as::<_, Team>(
+            "SELECT id, owner_id, name, created_at FROM teams WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_team_name(&self, id: i64, name: &str) -> Result<Option<Team>, sqlx::Error> {
+        let result = sqlx::query("UPDATE teams SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_team(id).await
+    }
+
+    pub async fn delete_team(&self, id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM teams WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ── Team Versions ────────────────────────────────────────────────
+
+    pub async fn create_team_version(
+        &self,
+        team_id: i64,
+        bot_version_a: i64,
+        bot_version_b: i64,
+    ) -> Result<TeamVersion, sqlx::Error> {
+        let max_version: Option<i32> =
+            sqlx::query_scalar("SELECT MAX(version) FROM team_versions WHERE team_id = ?")
+                .bind(team_id)
+                .fetch_one(&self.pool)
+                .await?;
+
+        let next_version = max_version.unwrap_or(0) + 1;
+
+        let row = sqlx::query_as::<_, TeamVersion>(
+            "INSERT INTO team_versions (team_id, version, bot_version_a, bot_version_b) VALUES (?, ?, ?, ?) RETURNING id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at",
+        )
+        .bind(team_id)
+        .bind(next_version)
+        .bind(bot_version_a)
+        .bind(bot_version_b)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_team_versions(&self, team_id: i64) -> Result<Vec<TeamVersion>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, TeamVersion>(
+            "SELECT id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at FROM team_versions WHERE team_id = ? ORDER BY version",
+        )
+        .bind(team_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_team_version(
+        &self,
+        team_id: i64,
+        version_id: i64,
+    ) -> Result<Option<TeamVersion>, sqlx::Error> {
+        let row = sqlx::query_as::<_, TeamVersion>(
+            "SELECT id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at FROM team_versions WHERE team_id = ? AND id = ?",
+        )
+        .bind(team_id)
+        .bind(version_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn leaderboard_2v2(
+        &self,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
+        // Placeholder: 2v2 teams will be added in Phase 7
+        Ok(vec![])
+    }
 }
 
 #[cfg(test)]
@@ -1165,5 +1426,228 @@ mod tests {
         assert_eq!(participants.len(), 2);
         assert_eq!(participants[0].final_score, 150);
         assert_eq!(participants[1].final_score, 80);
+    }
+
+    #[tokio::test]
+    async fn test_create_team_with_versions() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("teamowner", "team@test.com", "hash", "Team Owner")
+            .await
+            .unwrap();
+
+        let team = db.create_team(user.id, "Alpha Squad").await.unwrap();
+        assert_eq!(team.name, "Alpha Squad");
+        assert_eq!(team.owner_id, user.id);
+
+        let fetched = db.get_team(team.id).await.unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().name, "Alpha Squad");
+
+        // Create bots and versions for the team
+        let bot_a = db.create_bot("BotA", "", Some(user.id)).await.unwrap();
+        let bot_b = db.create_bot("BotB", "", Some(user.id)).await.unwrap();
+        let va = db
+            .create_bot_version(bot_a.id, "code_a", "oo")
+            .await
+            .unwrap();
+        let vb = db
+            .create_bot_version(bot_b.id, "code_b", "oo")
+            .await
+            .unwrap();
+
+        let tv1 = db.create_team_version(team.id, va.id, vb.id).await.unwrap();
+        assert_eq!(tv1.version, 1);
+        assert_eq!(tv1.bot_version_a, va.id);
+        assert_eq!(tv1.bot_version_b, vb.id);
+        assert_eq!(tv1.elo_rating, 1500);
+        assert_eq!(tv1.games_played, 0);
+
+        let versions = db.list_team_versions(team.id).await.unwrap();
+        assert_eq!(versions.len(), 1);
+
+        let fetched_tv = db.get_team_version(team.id, tv1.id).await.unwrap();
+        assert!(fetched_tv.is_some());
+        assert_eq!(fetched_tv.unwrap().version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_teams_by_owner() {
+        let db = test_db().await;
+
+        let user1 = db
+            .create_user("owner1", "o1@test.com", "hash", "Owner 1")
+            .await
+            .unwrap();
+        let user2 = db
+            .create_user("owner2", "o2@test.com", "hash", "Owner 2")
+            .await
+            .unwrap();
+
+        db.create_team(user1.id, "Team A").await.unwrap();
+        db.create_team(user1.id, "Team B").await.unwrap();
+        db.create_team(user2.id, "Team C").await.unwrap();
+
+        let teams1 = db.list_teams_by_owner(user1.id).await.unwrap();
+        assert_eq!(teams1.len(), 2);
+        assert_eq!(teams1[0].name, "Team A");
+        assert_eq!(teams1[1].name, "Team B");
+
+        let teams2 = db.list_teams_by_owner(user2.id).await.unwrap();
+        assert_eq!(teams2.len(), 1);
+        assert_eq!(teams2[0].name, "Team C");
+    }
+
+    #[tokio::test]
+    async fn test_team_version_auto_increment() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("tvuser", "tv@test.com", "hash", "TV User")
+            .await
+            .unwrap();
+        let team = db.create_team(user.id, "VersionTeam").await.unwrap();
+
+        let bot = db.create_bot("TVBot", "", Some(user.id)).await.unwrap();
+        let v1 = db.create_bot_version(bot.id, "code1", "oo").await.unwrap();
+        let v2 = db.create_bot_version(bot.id, "code2", "oo").await.unwrap();
+
+        let tv1 = db.create_team_version(team.id, v1.id, v2.id).await.unwrap();
+        assert_eq!(tv1.version, 1);
+
+        let tv2 = db.create_team_version(team.id, v2.id, v1.id).await.unwrap();
+        assert_eq!(tv2.version, 2);
+
+        let tv3 = db.create_team_version(team.id, v1.id, v1.id).await.unwrap();
+        assert_eq!(tv3.version, 3);
+
+        let versions = db.list_team_versions(team.id).await.unwrap();
+        assert_eq!(versions.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_update_and_delete_team() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("deluser", "del@test.com", "hash", "Del User")
+            .await
+            .unwrap();
+        let team = db.create_team(user.id, "OldName").await.unwrap();
+
+        let updated = db
+            .update_team_name(team.id, "NewName")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "NewName");
+
+        let not_found = db.update_team_name(999, "X").await.unwrap();
+        assert!(not_found.is_none());
+
+        assert!(db.delete_team(team.id).await.unwrap());
+        assert!(!db.delete_team(team.id).await.unwrap());
+
+        let gone = db.get_team(team.id).await.unwrap();
+        assert!(gone.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_1v1_ordering() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("lbuser", "lb@test.com", "hash", "LB User")
+            .await
+            .unwrap();
+
+        // Create two bots with different elo ratings
+        let bot_a = db.create_bot("BotHigh", "", Some(user.id)).await.unwrap();
+        let va = db
+            .create_bot_version(bot_a.id, "code_a", "oo")
+            .await
+            .unwrap();
+        db.update_version_elo(va.id, 1600).await.unwrap();
+        db.update_version_stats(va.id, true, false, false, 200, 10, 5, 3)
+            .await
+            .unwrap();
+
+        let bot_b = db.create_bot("BotLow", "", Some(user.id)).await.unwrap();
+        let vb = db
+            .create_bot_version(bot_b.id, "code_b", "oo")
+            .await
+            .unwrap();
+        db.update_version_elo(vb.id, 1520).await.unwrap();
+        db.update_version_stats(vb.id, true, false, false, 100, 5, 2, 1)
+            .await
+            .unwrap();
+
+        let leaderboard = db.leaderboard_1v1(50, 0).await.unwrap();
+        assert_eq!(leaderboard.len(), 2);
+        assert_eq!(leaderboard[0].bot_name, "BotHigh");
+        assert_eq!(leaderboard[0].rating, 1600);
+        assert_eq!(leaderboard[0].rank, 1);
+        assert_eq!(leaderboard[0].owner_username, "lbuser");
+        assert_eq!(leaderboard[1].bot_name, "BotLow");
+        assert_eq!(leaderboard[1].rating, 1520);
+        assert_eq!(leaderboard[1].rank, 2);
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_filters_archived_and_zero_games() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("filteruser", "filter@test.com", "hash", "Filter User")
+            .await
+            .unwrap();
+
+        // Bot with games played (should appear)
+        let bot_active = db.create_bot("ActiveBot", "", Some(user.id)).await.unwrap();
+        let v_active = db
+            .create_bot_version(bot_active.id, "code", "oo")
+            .await
+            .unwrap();
+        db.update_version_elo(v_active.id, 1550).await.unwrap();
+        db.update_version_stats(v_active.id, true, false, false, 100, 5, 3, 2)
+            .await
+            .unwrap();
+
+        // Archived bot with games played (should NOT appear)
+        let bot_archived = db
+            .create_bot("ArchivedBot", "", Some(user.id))
+            .await
+            .unwrap();
+        let v_archived = db
+            .create_bot_version(bot_archived.id, "code", "oo")
+            .await
+            .unwrap();
+        db.update_version_elo(v_archived.id, 1700).await.unwrap();
+        db.update_version_stats(v_archived.id, true, false, false, 300, 10, 8, 1)
+            .await
+            .unwrap();
+        db.archive_version(v_archived.id, true).await.unwrap();
+
+        // Bot with zero games (should NOT appear)
+        let bot_zero = db.create_bot("ZeroBot", "", Some(user.id)).await.unwrap();
+        let _v_zero = db
+            .create_bot_version(bot_zero.id, "code", "oo")
+            .await
+            .unwrap();
+
+        let leaderboard = db.leaderboard_1v1(50, 0).await.unwrap();
+        assert_eq!(leaderboard.len(), 1);
+        assert_eq!(leaderboard[0].bot_name, "ActiveBot");
+
+        // FFA leaderboard should behave the same way
+        db.update_version_ffa_stats(v_active.id, 10).await.unwrap();
+        let ffa_lb = db.leaderboard_ffa(50, 0).await.unwrap();
+        assert_eq!(ffa_lb.len(), 1);
+        assert_eq!(ffa_lb[0].bot_name, "ActiveBot");
+
+        // 2v2 placeholder should return empty
+        let lb_2v2 = db.leaderboard_2v2(50, 0).await.unwrap();
+        assert!(lb_2v2.is_empty());
     }
 }

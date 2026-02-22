@@ -45,6 +45,19 @@ export interface TournamentEntry {
   version?: number;
 }
 
+export interface LeaderboardEntry {
+  rank: number;
+  bot_version_id: number;
+  bot_name: string;
+  version: number;
+  owner_username: string;
+  rating: number;
+  games_played: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+}
+
 export interface MapInfo {
   name: string;
   width: number;
@@ -224,4 +237,17 @@ export const api = {
     fetch(`${BASE_URL}/api/game/stop`, { method: 'POST', headers: authHeaders() }).then(r => {
       if (!r.ok) throw new Error(`Stop failed: ${r.status}`);
     }),
+
+  // Leaderboards
+  leaderboard1v1: (limit = 50, offset = 0): Promise<LeaderboardEntry[]> =>
+    fetch(`${BASE_URL}/api/leaderboards/1v1?limit=${limit}&offset=${offset}`, { headers: authHeaders() })
+      .then(r => handleResponse<LeaderboardEntry[]>(r)),
+
+  leaderboardFfa: (limit = 50, offset = 0): Promise<LeaderboardEntry[]> =>
+    fetch(`${BASE_URL}/api/leaderboards/ffa?limit=${limit}&offset=${offset}`, { headers: authHeaders() })
+      .then(r => handleResponse<LeaderboardEntry[]>(r)),
+
+  leaderboard2v2: (limit = 50, offset = 0): Promise<LeaderboardEntry[]> =>
+    fetch(`${BASE_URL}/api/leaderboards/2v2?limit=${limit}&offset=${offset}`, { headers: authHeaders() })
+      .then(r => handleResponse<LeaderboardEntry[]>(r)),
 };

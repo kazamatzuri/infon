@@ -4,7 +4,7 @@
 
 Version 2.0 transforms Infon from a single-user MVP into a full multiplayer competitive platform. Players sign up, write bots, compete in ranked matches and tournaments, and climb leaderboards — all through a web UI or a well-documented API that's LLM-friendly by design.
 
-This document is organized into **phases** ordered by dependency and priority. Each phase is self-contained and delivers user-facing value.
+This document is organized into **phases**. Each phase is self-contained and delivers user-facing value. All phases will be developed in parallel.
 
 ---
 
@@ -83,6 +83,8 @@ Every save of a bot's code creates a new immutable version. Versions cannot be e
 
 ### 2.2 Elo Rating System
 
+Elo ratings apply to **1v1 matches** and **2v2 team matches** only. FFA games use placement-based scoring without Elo (see Phase 3).
+
 Each **bot version** has its own Elo rating, independent from other versions of the same bot. New versions use a **soft reset**: `(parent_version_elo + 1500) / 2`, which starts closer to the parent's proven skill without fully inheriting a rating earned by different code.
 
 #### Core Parameters
@@ -101,29 +103,31 @@ Standard Elo formula:
 - Expected score: `E_a = 1 / (1 + 10^((R_b - R_a) / 400))`
 - New rating: `R'_a = R_a + K * (S_a - E_a)` where S is 1 (win), 0.5 (draw), 0 (loss)
 
-#### Free-For-All (5-player)
-
-Decompose the FFA into all C(N,2) pairwise matchups. For a 5-player game, that's 10 virtual 1v1s — each player has 4 opponents. Final placement determines the actual score for each pair:
-- Higher-placed player gets S=1, lower gets S=0
-- Adjacent placements can use S=0.75/0.25 to soften volatility
-- **Critical**: K-factor is divided by (N-1) to normalize total Elo change per game. Without this, a 5-player FFA would cause 4x the rating swing of a 1v1.
-- All deltas are computed simultaneously before any are applied (batch update), avoiding order-dependent results
-
 #### Team Matches (2v2)
 
 Each **team** (a named pair of bot versions) has its own Elo rating. The team average rating is used in the standard 1v1 formula against the opposing team's average. To prevent rating farming (e.g., a 2000-rated bot teaming with a 1000-rated bot to face weaker opponents), each bot's individual rating update is computed based on *its own rating* versus the *enemy team average* — so the strong bot gains very little from an expected win, while the weaker teammate gains more. Consider widening the scaling divisor from 400 to 500 for team games to dampen individual rating variance.
 
+#### Free-For-All — No Elo
+
+FFA games do **not** use Elo ratings. Pairwise Elo decomposition for multiplayer is fundamentally flawed (players who happen to avoid each other get inflated ratings). Instead, FFA uses placement-based scoring:
+- Players are ranked by final score at end of match
+- Placement points awarded: 1st = N points, 2nd = N-1, ..., last = 1 (where N = number of players)
+- FFA leaderboard ranked by cumulative placement points and average placement
+- This is simpler, fairer, and avoids the well-known problems with multiplayer Elo decomposition
+
 ### 2.3 Stats Tracking
 
 Per bot version:
-- Elo rating, peak Elo, game count
+- Elo rating + peak Elo (1v1 and 2v2 only), game count
 - Win/loss/draw record (by match format: 1v1, FFA, 2v2)
+- FFA: average placement, total placement points
 - Creatures spawned/killed/lost totals
 - Average score per game
 
 Per user:
 - Number of bots, total games played
-- Best Elo across all bot versions
+- Best Elo across all bot versions (1v1 + 2v2)
+- Best FFA average placement
 
 ---
 
@@ -135,10 +139,10 @@ Per user:
 
 Three separate leaderboards:
 1. **1v1** — ranked by bot version Elo
-2. **5-Player FFA** — ranked by bot version Elo (FFA-specific rating)
+2. **FFA** — ranked by cumulative placement points / average placement (no Elo)
 3. **2v2 Teams** — ranked by team Elo
 
-Each leaderboard shows: rank, bot name, version, owner, Elo, games played, win rate.
+Each leaderboard shows: rank, bot name, version, owner, rating (Elo or placement score), games played, win rate.
 
 ### 3.2 Leagues by Account Age
 
@@ -162,47 +166,46 @@ To give newcomers a fair playground:
 
 ---
 
-## Phase 4: Match System & Competition Tokens
+## Phase 4: Match System
 
-**Goal**: A resource-managed system for running matches on shared infrastructure.
+**Goal**: A system for running matches on shared infrastructure, protected by rate limiting.
 
-### 4.1 Competition Tokens
+### 4.1 Rate Limiting
 
-| Parameter | Value |
-|-----------|-------|
-| Starting balance | 10 tokens |
-| Daily accrual | +1 token/day |
-| Maximum cap | 20 tokens |
-| Cost: enter tournament | 1 token |
-| Cost: live-streamed challenge | 1 token |
-| Cost: headless challenge | 0 tokens (free) |
+Instead of a token economy, match abuse is prevented via per-user rate limits:
 
-Tokens prevent compute abuse while keeping the platform accessible. Free headless matches let players iterate quickly; tokens gate the more expensive live-streamed and tournament compute.
+| Limit | Value | Notes |
+|-------|-------|-------|
+| Concurrent live games | 3 per user | Prevents hogging live-stream slots |
+| Live challenges per hour | 10 per user | Generous for active play |
+| Headless challenges per hour | 30 per user | Fast iteration for bot development |
+| Tournament entries per day | 5 per user | Prevents spam entries |
+
+Rate limits are enforced server-side and communicated via standard `429 Too Many Requests` + `Retry-After` headers. Monetization will be explored separately down the road.
 
 ### 4.2 Challenge System
 
 Players can challenge any bot from the leaderboard:
 
-#### Live Challenge (1 token)
+#### Live Challenge
 1. Player selects their bot version and the opponent bot
-2. Spends 1 competition token
-3. Match enters the **game queue**
-4. Player gets a match page that shows:
+2. Match enters the **game queue**
+3. Player gets a match page that shows:
    - Queue position and rough ETA while waiting
    - Live game stream once the match starts
    - Results and replay link after completion
-5. Match affects Elo for both bot versions
+4. 1v1 and 2v2 matches affect Elo; FFA matches award placement points
 
-#### Headless Challenge (free)
-1. Same selection flow, no token cost
+#### Headless Challenge
+1. Same selection flow
 2. Match runs in background at maximum tick speed (no rendering overhead)
 3. Player gets a notification when complete
 4. Results page with replay link
-5. Match affects Elo normally
+5. Ratings updated normally
 
 ### 4.3 Game Queue
 
-- FIFO queue with priority for token-spending matches
+- FIFO queue
 - Queue status visible to all users (current queue depth, estimated wait)
 - Concurrent match runner (configurable parallelism based on server capacity)
 - Match timeout: games have a maximum tick count to prevent infinite games
@@ -211,10 +214,9 @@ Players can challenge any bot from the leaderboard:
 
 Recurring open matches anyone can join:
 - Reset every **2 hours**
-- Up to **100 players** per game
-- Requires larger maps (see Phase 8: Scaling)
-- Entry is free (no token cost)
-- Results count toward a separate "Public Game" stat (not Elo-ranked)
+- Up to **20 players** per game (may scale to more once engine optimizations in Phase 9 are proven)
+- Larger maps proportional to player count
+- Results count toward FFA placement leaderboard
 - Live-streamed by default — spectate from the game list
 
 ---
@@ -274,7 +276,7 @@ Every match has a permanent page:
 
 Automated recurring tournaments:
 - **Daily ladder**: 1v1 Swiss-system, 5 rounds, top Elo bots auto-entered
-- **Weekly FFA**: 5-player FFA bracket, open registration (1 token entry)
+- **Weekly FFA**: 5-player FFA bracket, open registration
 - **Monthly championship**: Invite top N from weekly results
 
 ### 6.2 Tournament Structure
@@ -285,10 +287,10 @@ Tournaments support multiple formats:
 - **Swiss system** — fixed rounds, opponents matched by current standing
 
 Tournament lifecycle:
-1. **Registration** — open for entries (token cost: 1 per bot entered)
-2. **Seeding** — based on current Elo
+1. **Registration** — open for entries (subject to daily rate limit)
+2. **Seeding** — based on current Elo (1v1/2v2) or placement score (FFA)
 3. **Running** — matches execute in order, results update live
-4. **Complete** — final standings, Elo adjustments applied
+4. **Complete** — final standings, rating adjustments applied
 
 ### 6.3 Tournament Visualization
 
@@ -297,15 +299,17 @@ Tournament lifecycle:
 - **Match links** from every bracket slot to the match replay
 - **Tournament history** page listing past tournaments with winners
 
-### 6.4 Prize-Money Tournaments (Future — requires user base)
+### 6.4 Prize-Money Tournaments — BACKLOG
 
-Once the platform has sufficient users:
-- Entry fee: $1.00 per bot
-- Prize pool: 90% of total entry fees (10% house cut for compute costs)
-- Distribution: 50% / 30% / 20% across top 3
-- Requires payment integration (Stripe)
-- Terms of service, age verification, regional legality checks
-- Minimum participant threshold to run (e.g., 8 players minimum)
+Moved to backlog. Requires significant prerequisites before consideration:
+- Stable user base (200+ monthly active players)
+- Proven anti-cheat and rating integrity over 6+ months
+- Legal entity, terms of service, tax reporting (1099 in US for prizes > $600)
+- Age verification, regional legality checks (gambling law varies by jurisdiction)
+- Payment integration (Stripe)
+- Deterministic replay verification (money on the line = every result must be independently verifiable)
+
+Will revisit once the competitive scene is established and there is organic community demand.
 
 ---
 
@@ -417,9 +421,6 @@ Tournaments:
   GET    /api/v2/tournaments/{id}/bracket
   GET    /api/v2/tournaments/{id}/matches
 
-Tokens (competition):
-  GET    /api/v2/tokens/balance
-
 API Keys:
   GET    /api/v2/api-keys
   POST   /api/v2/api-keys
@@ -452,19 +453,21 @@ A typical LLM-driven workflow:
 
 ---
 
-## Phase 9: Scaling for 100-Player Games
+## Phase 9: Scaling & Large Games
 
-**Goal**: Support public games with up to 100 simultaneous players.
+**Goal**: Optimize the engine for 20-player public games, with a path toward larger games if demand warrants it.
+
+The initial target is **20 players** per public game. This is already visually impressive and avoids the unsolved game balance problems of 100-player games (food scarcity, KotH meaninglessness at scale, Lua VM budget). We can scale up incrementally once 20-player is proven.
 
 ### 9.1 Larger Maps
 
 - New map format supporting larger tile grids (current maps are small)
 - Map generator for large procedural maps with balanced resource distribution
-- Maps sized proportionally to player count (e.g., 100 players needs ~10x area of a 10-player map)
+- Maps sized proportionally to player count
 
 ### 9.2 Engine Optimization
 
-- Profile and optimize the Lua VM pool (100 concurrent VMs)
+- Profile and optimize the Lua VM pool (20+ concurrent VMs)
 - Batch creature updates for efficiency
 - Consider spatial partitioning (quadtree) for collision/nearest-enemy queries at scale
 - Tick budget monitoring — if a tick takes too long, reduce per-player CPU allowance
@@ -475,7 +478,14 @@ A typical LLM-driven workflow:
 - Delta compression for WebSocket messages (only send changes)
 - Viewport-based streaming (only send creatures visible to the viewer's viewport)
 - Reduce update frequency for distant creatures
-- Consider multiple quality tiers (full detail for 10 viewers, summary for 100+)
+
+### 9.4 Future: 50-100 Player Games
+
+If 20-player games prove popular and the engine handles them well, consider:
+- Scaling to 50, then 100 players
+- Alternative scoring mode for large games (survival-based rather than KotH)
+- Multiple quality tiers for spectators (full detail for 10 viewers, summary for 100+)
+- More aggressive per-bot CPU limits to fit more players per tick
 
 ---
 
@@ -520,7 +530,7 @@ A typical LLM-driven workflow:
 - **Lua API Reference**: existing docs, expanded with more examples
 - **Strategy Guide**: creature types, common patterns, advanced tactics
 - **FAQ / Troubleshooting**: common Lua errors, why my bot isn't moving, etc.
-- **Tournament Guide**: how leagues work, Elo explained, competition tokens
+- **Tournament Guide**: how leagues work, Elo explained, rate limits
 
 ### 11.2 LLM Documentation
 
@@ -599,7 +609,7 @@ docker run -p 3000:3000 infon/infon-server
 
 - Includes backend + frontend + SQLite
 - No authentication required in local mode
-- Unlimited compute (no token system)
+- No rate limits in local mode
 - Documented in a **"Local Development"** guide
 
 ### 13.2 CLI Tool (stretch goal)
@@ -614,7 +624,9 @@ infon match --live bot1.lua bot2.lua    # 1v1 with local web viewer
 
 ---
 
-## Priority & Dependency Order
+## Dependencies
+
+All phases are developed in parallel. The dependency graph below shows hard prerequisites — phases can otherwise proceed independently.
 
 ```
 Phase 1: Accounts & Auth          ─── foundation for everything
@@ -623,7 +635,7 @@ Phase 1: Accounts & Auth          ─── foundation for everything
   │     │
   │     ├── Phase 3: Leaderboards
   │     │
-  │     ├── Phase 4: Match System & Tokens
+  │     ├── Phase 4: Match System
   │     │     │
   │     │     └── Phase 5: Replays
   │     │
@@ -631,35 +643,15 @@ Phase 1: Accounts & Auth          ─── foundation for everything
   │
   ├── Phase 6: Tournaments        ─── depends on matches + replays
   │
-  ├── Phase 8: API & LLM          ─── can start early, grows with features
+  ├── Phase 8: API & LLM          ─── grows with features
   │
-  └── Phase 11: Documentation     ─── ongoing, start early
-        │
-        └── Phase 12: Community
+  └── Phase 11: Documentation     ─── ongoing
 
-Phase 9: Scaling (100 players)    ─── independent engineering work
+Phase 9: Scaling (20+ players)    ─── independent engineering work
 Phase 10: Live Experience         ─── after match system is solid
+Phase 12: Community               ─── grows organically
 Phase 13: Local Play              ─── independent, can ship anytime
 ```
-
-### Suggested Build Order
-
-| Order | Phase | Why now |
-|-------|-------|---------|
-| 1 | **Phase 1**: Accounts & Auth | Nothing multiplayer works without identity |
-| 2 | **Phase 2**: Versioning & Elo | Core competitive mechanic, needed before any ranking |
-| 3 | **Phase 8** (partial): API v2 skeleton | Define the API contract early, build against it |
-| 4 | **Phase 4**: Match System & Tokens | Players need to be able to play against each other |
-| 5 | **Phase 3**: Leaderboards | Gives players a reason to keep competing |
-| 6 | **Phase 5**: Replays | Needed for tournaments, valuable standalone |
-| 7 | **Phase 11**: Documentation | Critical for onboarding; LLM docs unlock a new user segment |
-| 8 | **Phase 6**: Tournaments | The competitive endgame |
-| 9 | **Phase 7**: Teams | Adds format variety |
-| 10 | **Phase 13**: Local Play | Docker image, low effort, high value for bot developers |
-| 11 | **Phase 10**: Live Experience | Chat, notifications, spectating polish |
-| 12 | **Phase 9**: Scaling | Only needed when public games demand it |
-| 13 | **Phase 12**: Community | Grows organically, formal investment later |
-| 14 | **Phase 6.4**: Prize Tournaments | Only after stable user base and legal review |
 
 ---
 
@@ -723,7 +715,8 @@ infon_koth_captures_total                        # king-of-the-hill flips
 # Histograms
 infon_match_score{format}                        # score distribution
 infon_creatures_per_game{format}                 # total creatures spawned per match
-infon_elo_change_per_match{format}               # magnitude of Elo swings
+infon_elo_change_per_match{format}               # magnitude of Elo swings (1v1, 2v2 only)
+infon_ffa_placement{position}                    # distribution of FFA placements
 ```
 
 #### Player-Facing Stats (derived via PromQL)
@@ -777,6 +770,7 @@ histogram_quantile(0.99, rate(infon_lua_execution_duration_ms_bucket[5m]))
 2. **Bot marketplace?** — Should there be a way to "fork" public bots (with attribution)?
 3. **Seasonal resets?** — Should Elo reset periodically, or is an ever-growing rating history better?
 4. **Spectator betting?** — Fun engagement mechanic with virtual currency (not real money)?
-5. **Bot CPU limits** — Current per-player CPU budget needs tuning for 100-player games. What's the right balance?
+5. **Bot CPU limits** — Per-player CPU budget needs tuning as player counts grow. Start with ~5ms per bot per tick for 20-player games.
 6. **Replay storage** — How long to keep replays? Compress and archive after 30 days? Keep tournament replays forever?
 7. **Anti-cheat** — Beyond Lua sandboxing, do we need to detect bots that exploit engine bugs?
+8. **Monetization** — Token system was dropped in favor of rate limiting. Future monetization options to explore: cosmetics (creature skins, profile badges), supporter tier with higher rate limits, sponsored tournaments.

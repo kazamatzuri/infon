@@ -3,7 +3,7 @@
 pub mod ws;
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use std::path::PathBuf;
 
-use crate::auth::OptionalAuthUser;
+use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::Database;
 use crate::engine::server::{self, GameServer, PlayerEntry};
 use crate::engine::world::World;
@@ -72,6 +72,28 @@ pub struct SetActiveVersionRequest {
 #[derive(Deserialize)]
 pub struct UpdateBotVersionRequest {
     pub is_archived: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct PaginationParams {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateTeamRequest {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateTeamRequest {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateTeamVersionRequest {
+    pub bot_version_a: i64,
+    pub bot_version_b: i64,
 }
 
 // ── Shared application state ─────────────────────────────────────────
@@ -145,6 +167,20 @@ pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
         .route("/api/tournaments/{id}/results", get(get_tournament_results))
         // Tournament run
         .route("/api/tournaments/{id}/run", post(run_tournament))
+        // Leaderboards
+        .route("/api/leaderboards/1v1", get(leaderboard_1v1))
+        .route("/api/leaderboards/ffa", get(leaderboard_ffa))
+        .route("/api/leaderboards/2v2", get(leaderboard_2v2))
+        // Teams
+        .route("/api/teams", get(list_teams).post(create_team))
+        .route(
+            "/api/teams/{id}",
+            get(get_team).put(update_team).delete(delete_team),
+        )
+        .route(
+            "/api/teams/{id}/versions",
+            get(list_team_versions).post(create_team_version),
+        )
         // Game control
         .route("/api/game/start", post(start_game))
         .route("/api/game/status", get(game_status))
@@ -610,6 +646,44 @@ fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World
     }
 }
 
+// ── Leaderboard handlers ─────────────────────────────────────────────
+
+async fn leaderboard_1v1(
+    State(state): State<AppState>,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).min(100);
+    let offset = params.offset.unwrap_or(0).max(0);
+    match state.db.leaderboard_1v1(limit, offset).await {
+        Ok(entries) => (StatusCode::OK, Json(json!(entries))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn leaderboard_ffa(
+    State(state): State<AppState>,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).min(100);
+    let offset = params.offset.unwrap_or(0).max(0);
+    match state.db.leaderboard_ffa(limit, offset).await {
+        Ok(entries) => (StatusCode::OK, Json(json!(entries))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn leaderboard_2v2(
+    State(state): State<AppState>,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).min(100);
+    let offset = params.offset.unwrap_or(0).max(0);
+    match state.db.leaderboard_2v2(limit, offset).await {
+        Ok(entries) => (StatusCode::OK, Json(json!(entries))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
 // ── Game control handlers ────────────────────────────────────────────
 
 async fn start_game(
@@ -689,4 +763,164 @@ async fn stop_game(State(state): State<AppState>) -> impl IntoResponse {
     }
     state.game_server.stop_game();
     (StatusCode::OK, Json(json!({ "status": "stopping" }))).into_response()
+}
+
+// ── Team handlers ──────────────────────────────────────────────────────
+
+async fn list_teams(State(state): State<AppState>, auth: AuthUser) -> impl IntoResponse {
+    match state.db.list_teams_by_owner(auth.0.sub).await {
+        Ok(teams) => (StatusCode::OK, Json(json!(teams))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn create_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<CreateTeamRequest>,
+) -> impl IntoResponse {
+    if req.name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    match state.db.create_team(auth.0.sub, &req.name).await {
+        Ok(team) => (StatusCode::CREATED, Json(json!(team))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn get_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.get_team(id).await {
+        Ok(Some(team)) => {
+            if team.owner_id != auth.0.sub {
+                return json_error(StatusCode::FORBIDDEN, "Not your team").into_response();
+            }
+            (StatusCode::OK, Json(json!(team))).into_response()
+        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn update_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateTeamRequest>,
+) -> impl IntoResponse {
+    if req.name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    // Check ownership
+    match state.db.get_team(id).await {
+        Ok(Some(team)) => {
+            if team.owner_id != auth.0.sub {
+                return json_error(StatusCode::FORBIDDEN, "Not your team").into_response();
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
+    match state.db.update_team_name(id, &req.name).await {
+        Ok(Some(team)) => (StatusCode::OK, Json(json!(team))).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn delete_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    // Check ownership
+    match state.db.get_team(id).await {
+        Ok(Some(team)) => {
+            if team.owner_id != auth.0.sub {
+                return json_error(StatusCode::FORBIDDEN, "Not your team").into_response();
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
+    match state.db.delete_team(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+// ── Team version handlers ──────────────────────────────────────────────
+
+async fn list_team_versions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<i64>,
+) -> impl IntoResponse {
+    // Check team exists and ownership
+    match state.db.get_team(team_id).await {
+        Ok(Some(team)) => {
+            if team.owner_id != auth.0.sub {
+                return json_error(StatusCode::FORBIDDEN, "Not your team").into_response();
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
+    match state.db.list_team_versions(team_id).await {
+        Ok(versions) => (StatusCode::OK, Json(json!(versions))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn create_team_version(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<i64>,
+    Json(req): Json<CreateTeamVersionRequest>,
+) -> impl IntoResponse {
+    // Check team exists and ownership
+    match state.db.get_team(team_id).await {
+        Ok(Some(team)) => {
+            if team.owner_id != auth.0.sub {
+                return json_error(StatusCode::FORBIDDEN, "Not your team").into_response();
+            }
+        }
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Team not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
+    // Verify both bot versions exist
+    match state.db.get_bot_version_by_id(req.bot_version_a).await {
+        Ok(None) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Bot version {} not found", req.bot_version_a),
+            )
+            .into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match state.db.get_bot_version_by_id(req.bot_version_b).await {
+        Ok(None) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Bot version {} not found", req.bot_version_b),
+            )
+            .into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match state
+        .db
+        .create_team_version(team_id, req.bot_version_a, req.bot_version_b)
+        .await
+    {
+        Ok(version) => (StatusCode::CREATED, Json(json!(version))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
 }
