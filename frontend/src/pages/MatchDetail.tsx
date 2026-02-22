@@ -115,7 +115,7 @@ export function MatchDetail() {
 
       <h3 style={{ color: '#e0e0e0', marginBottom: '12px' }}>Participants</h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '24px' }}>
-        {participants
+        {[...participants]
           .sort((a, b) => a.player_slot - b.player_slot)
           .map(p => (
             <div key={p.id} style={{

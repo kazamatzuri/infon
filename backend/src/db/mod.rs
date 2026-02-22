@@ -108,6 +108,8 @@ pub struct TournamentEntry {
     pub tournament_id: i64,
     pub bot_version_id: i64,
     pub slot_name: String,
+    pub bot_name: Option<String>,
+    pub version: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -646,7 +648,7 @@ impl Database {
             .fetch_one(&self.pool)
             .await?;
             let parent = parent_elo.unwrap_or(1500);
-            (parent + 1500) / 2
+            crate::elo::soft_reset_elo(parent)
         } else {
             1500
         };
@@ -1085,7 +1087,7 @@ impl Database {
         slot_name: &str,
     ) -> Result<TournamentEntry, sqlx::Error> {
         let row = sqlx::query_as::<_, TournamentEntry>(
-            "INSERT INTO tournament_entries (tournament_id, bot_version_id, slot_name) VALUES (?, ?, ?) RETURNING id, tournament_id, bot_version_id, slot_name",
+            "INSERT INTO tournament_entries (tournament_id, bot_version_id, slot_name) VALUES (?, ?, ?) RETURNING id, tournament_id, bot_version_id, slot_name, NULL AS bot_name, NULL AS version",
         )
         .bind(tournament_id)
         .bind(bot_version_id)
@@ -1100,7 +1102,7 @@ impl Database {
         tournament_id: i64,
     ) -> Result<Vec<TournamentEntry>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TournamentEntry>(
-            "SELECT id, tournament_id, bot_version_id, slot_name FROM tournament_entries WHERE tournament_id = ? ORDER BY id",
+            "SELECT te.id, te.tournament_id, te.bot_version_id, te.slot_name, b.name AS bot_name, bv.version FROM tournament_entries te LEFT JOIN bot_versions bv ON bv.id = te.bot_version_id LEFT JOIN bots b ON b.id = bv.bot_id WHERE te.tournament_id = ? ORDER BY te.id",
         )
         .bind(tournament_id)
         .fetch_all(&self.pool)

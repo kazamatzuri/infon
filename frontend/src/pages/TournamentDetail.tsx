@@ -327,7 +327,7 @@ export function TournamentDetail() {
               </tr>
             </thead>
             <tbody>
-              {results
+              {[...results]
                 .sort((a, b) => b.final_score - a.final_score)
                 .map((r, i) => (
                   <tr key={r.id} style={{ borderBottom: '1px solid #222' }}>

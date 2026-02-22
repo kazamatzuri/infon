@@ -323,7 +323,7 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
               color: '#e0e0e0', textAlign: 'center', border: '1px solid #333',
             }}>
               <h2 style={{ color: '#f5a623', margin: '0 0 16px 0' }}>Game Over</h2>
-              {gameEnd.final_scores
+              {[...gameEnd.final_scores]
                 .sort((a, b) => b.score - a.score)
                 .map((p, i) => (
                   <div key={p.id} style={{ padding: '4px 0', color: i === 0 ? '#16c79a' : '#aaa' }}>
@@ -350,7 +350,7 @@ export function ReplayCanvas({ messages, tickCount }: ReplayCanvasProps) {
           {players.length === 0 ? (
             <p style={{ color: '#666', fontSize: '13px' }}>No data yet</p>
           ) : (
-            players
+            [...players]
               .sort((a, b) => b.score - a.score)
               .map(p => (
                 <div key={p.id} style={{

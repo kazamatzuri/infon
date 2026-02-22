@@ -21,6 +21,10 @@ use crate::engine::server::{self, GameResult, GameServer, PlayerEntry};
 use crate::engine::world::World;
 use crate::queue::GameQueue;
 use crate::rate_limit::{RateLimitType, RateLimiter};
+use crate::tournament::{
+    generate_round_robin_pairings, generate_single_elimination_bracket, generate_swiss_pairings,
+    total_rounds, TournamentFormat,
+};
 
 // ── Request types ─────────────────────────────────────────────────────
 
@@ -767,10 +771,6 @@ async fn run_tournament(
         Err(e) => return internal_error(e).into_response(),
     };
 
-    if state.game_server.is_running() {
-        return json_error(StatusCode::CONFLICT, "A game is already running").into_response();
-    }
-
     // Load tournament entries
     let entries = match state.db.list_tournament_entries(tournament_id).await {
         Ok(e) => e,
@@ -781,71 +781,110 @@ async fn run_tournament(
         return json_error(StatusCode::BAD_REQUEST, "Tournament has no entries").into_response();
     }
 
-    // Load bot code for each entry
-    let mut players = Vec::new();
-    for entry in &entries {
-        let version = match state.db.get_bot_version_by_id(entry.bot_version_id).await {
-            Ok(Some(v)) => v,
-            Ok(None) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!(
-                        "Bot version {} not found for entry {}",
-                        entry.bot_version_id, entry.id
-                    ),
-                )
-                .into_response();
-            }
-            Err(e) => return internal_error(e).into_response(),
-        };
-
-        let name = if entry.slot_name.is_empty() {
-            format!("Player {}", entry.id)
-        } else {
-            entry.slot_name.clone()
-        };
-
-        players.push(PlayerEntry {
-            name,
-            code: version.code,
-            api_type: version.api_type,
-        });
+    if entries.len() < 2 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Tournament needs at least 2 entries",
+        )
+        .into_response();
     }
 
-    // Create world from tournament map setting
-    let map_name = if tournament.map == "default" {
-        None
-    } else {
-        Some(tournament.map.clone())
-    };
-    let world = match resolve_map(&state.maps_dir, &map_name) {
-        Ok(w) => w,
-        Err(e) => {
-            return json_error(StatusCode::BAD_REQUEST, &format!("Invalid map: {}", e))
-                .into_response()
+    // Parse tournament format
+    let format =
+        TournamentFormat::from_str_name(&tournament.format).unwrap_or(TournamentFormat::RoundRobin);
+
+    let version_ids: Vec<i64> = entries.iter().map(|e| e.bot_version_id).collect();
+
+    // Generate pairings for current round
+    let pairings = match &format {
+        TournamentFormat::RoundRobin => generate_round_robin_pairings(&version_ids),
+        TournamentFormat::SingleElimination => generate_single_elimination_bracket(&version_ids),
+        TournamentFormat::Swiss { .. } => {
+            // First round: no standings yet
+            generate_swiss_pairings(&version_ids, &[], 0)
         }
     };
+
+    let num_rounds = total_rounds(&format, version_ids.len());
+    let _ = state
+        .db
+        .update_tournament(
+            tournament_id,
+            None,
+            None,
+            None,
+            Some(&serde_json::json!({"total_rounds": num_rounds}).to_string()),
+        )
+        .await;
+
+    // Create and queue matches for each pairing
+    let mut match_ids = Vec::new();
+    for (vid_a, vid_b) in &pairings {
+        // Load bot versions for names
+        let va = state.db.get_bot_version_by_id(*vid_a).await;
+        let vb = state.db.get_bot_version_by_id(*vid_b).await;
+
+        let (va, vb) = match (va, vb) {
+            (Ok(Some(a)), Ok(Some(b))) => (a, b),
+            _ => continue,
+        };
+
+        let name_a = match state.db.get_bot(va.bot_id).await {
+            Ok(Some(b)) => format!("{} v{}", b.name, va.version),
+            _ => format!("Bot v{}", va.version),
+        };
+        let name_b = match state.db.get_bot(vb.bot_id).await {
+            Ok(Some(b)) => format!("{} v{}", b.name, vb.version),
+            _ => format!("Bot v{}", vb.version),
+        };
+
+        // Create match in DB
+        let m = match state.db.create_match("1v1", &tournament.map).await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let _ = state.db.add_match_participant(m.id, *vid_a, 0).await;
+        let _ = state.db.add_match_participant(m.id, *vid_b, 1).await;
+
+        // Queue the match
+        state.game_queue.enqueue(crate::queue::QueueEntry {
+            match_id: m.id,
+            players: vec![
+                crate::queue::QueuePlayer {
+                    bot_version_id: *vid_a,
+                    name: name_a,
+                },
+                crate::queue::QueuePlayer {
+                    bot_version_id: *vid_b,
+                    name: name_b,
+                },
+            ],
+            map: Some(tournament.map.clone()),
+            headless: true, // tournament matches run headless
+        });
+
+        match_ids.push(m.id);
+    }
 
     // Update tournament status
     let _ = state
         .db
         .update_tournament_status(tournament_id, "running")
         .await;
+    let _ = state.db.update_tournament_round(tournament_id, 1).await;
 
-    // Start the game
-    match state.game_server.start_game(world, players, None) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "running",
-                "tournament_id": tournament_id,
-                "tournament_name": tournament.name,
-                "message": "Game started. Connect to /ws/game for live updates."
-            })),
-        )
-            .into_response(),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
-    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "running",
+            "tournament_id": tournament_id,
+            "matches_queued": match_ids.len(),
+            "match_ids": match_ids,
+            "format": tournament.format,
+            "total_rounds": num_rounds,
+        })),
+    )
+        .into_response()
 }
 
 // ── Map handlers ─────────────────────────────────────────────────────
@@ -1613,6 +1652,25 @@ pub fn build_game_completion_callback(
 
                 let _ = db.update_version_elo(p0.bot_version_id, new_elo_0).await;
                 let _ = db.update_version_elo(p1.bot_version_id, new_elo_1).await;
+            }
+
+            // FFA placement scoring
+            if format == "ffa" && participants.len() > 2 {
+                // Sort participants by score descending to determine placement
+                let mut sorted: Vec<(usize, &crate::db::MatchParticipant)> =
+                    participants.iter().enumerate().collect();
+                sorted.sort_by(|a, b| {
+                    let score_a = result.player_scores.get(a.0).map(|s| s.score).unwrap_or(0);
+                    let score_b = result.player_scores.get(b.0).map(|s| s.score).unwrap_or(0);
+                    score_b.cmp(&score_a)
+                });
+
+                let n_players = participants.len() as i32;
+                for (placement_idx, (_orig_idx, p)) in sorted.iter().enumerate() {
+                    let placement = (placement_idx + 1) as i32;
+                    let points = crate::elo::ffa_placement_points(placement, n_players);
+                    let _ = db.update_version_ffa_stats(p.bot_version_id, points).await;
+                }
             }
         });
     })
