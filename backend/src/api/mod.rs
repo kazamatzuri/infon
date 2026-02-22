@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use std::path::PathBuf;
 
+use crate::auth::OptionalAuthUser;
 use crate::db::Database;
 use crate::engine::server::{self, GameServer, PlayerEntry};
 use crate::engine::world::World;
@@ -80,10 +81,7 @@ fn json_error(status: StatusCode, msg: &str) -> impl IntoResponse {
 
 fn internal_error(e: sqlx::Error) -> impl IntoResponse {
     tracing::error!("Database error: {e}");
-    json_error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Internal server error",
-    )
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
 }
 
 // ── Router ────────────────────────────────────────────────────────────
@@ -130,10 +128,7 @@ pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
             delete(remove_tournament_entry),
         )
         // Tournament results
-        .route(
-            "/api/tournaments/{id}/results",
-            get(get_tournament_results),
-        )
+        .route("/api/tournaments/{id}/results", get(get_tournament_results))
         // Tournament run
         .route("/api/tournaments/{id}/run", post(run_tournament))
         // Game control
@@ -156,22 +151,21 @@ async fn list_bots(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn create_bot(
     State(state): State<AppState>,
+    auth: OptionalAuthUser,
     Json(req): Json<CreateBotRequest>,
 ) -> impl IntoResponse {
     if req.name.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
     }
     let description = req.description.unwrap_or_default();
-    match state.db.create_bot(&req.name, &description).await {
+    let owner_id = auth.0.map(|c| c.sub);
+    match state.db.create_bot(&req.name, &description, owner_id).await {
         Ok(bot) => (StatusCode::CREATED, Json(json!(bot))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
 }
 
-async fn get_bot(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+async fn get_bot(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     match state.db.get_bot(id).await {
         Ok(Some(bot)) => (StatusCode::OK, Json(json!(bot))).into_response(),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
@@ -195,10 +189,7 @@ async fn update_bot(
     }
 }
 
-async fn delete_bot(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+async fn delete_bot(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     match state.db.delete_bot(id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
@@ -240,7 +231,11 @@ async fn create_bot_version(
         return json_error(StatusCode::BAD_REQUEST, "api_type must be 'oo' or 'state'")
             .into_response();
     }
-    match state.db.create_bot_version(bot_id, &req.code, &api_type).await {
+    match state
+        .db
+        .create_bot_version(bot_id, &req.code, &api_type)
+        .await
+    {
         Ok(version) => (StatusCode::CREATED, Json(json!(version))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -252,9 +247,7 @@ async fn get_bot_version(
 ) -> impl IntoResponse {
     match state.db.get_bot_version(bot_id, version_id).await {
         Ok(Some(version)) => (StatusCode::OK, Json(json!(version))).into_response(),
-        Ok(None) => {
-            json_error(StatusCode::NOT_FOUND, "Bot version not found").into_response()
-        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Bot version not found").into_response(),
         Err(e) => internal_error(e).into_response(),
     }
 }
@@ -282,15 +275,10 @@ async fn create_tournament(
     }
 }
 
-async fn get_tournament(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+async fn get_tournament(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     match state.db.get_tournament(id).await {
         Ok(Some(tournament)) => (StatusCode::OK, Json(json!(tournament))).into_response(),
-        Ok(None) => {
-            json_error(StatusCode::NOT_FOUND, "Tournament not found").into_response()
-        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Tournament not found").into_response(),
         Err(e) => internal_error(e).into_response(),
     }
 }
@@ -327,7 +315,8 @@ async fn add_tournament_entry(
         Ok(Some(_)) => {}
     }
     let slot_name = req.slot_name.unwrap_or_default();
-    match state.db
+    match state
+        .db
         .add_tournament_entry(tournament_id, req.bot_version_id, &slot_name)
         .await
     {
@@ -400,11 +389,7 @@ async fn run_tournament(
     // Load bot code for each entry
     let mut players = Vec::new();
     for entry in &entries {
-        let version = match state
-            .db
-            .get_bot_version_by_id(entry.bot_version_id)
-            .await
-        {
+        let version = match state.db.get_bot_version_by_id(entry.bot_version_id).await {
             Ok(Some(v)) => v,
             Ok(None) => {
                 return json_error(

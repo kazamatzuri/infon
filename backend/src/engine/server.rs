@@ -66,8 +66,8 @@ pub fn list_maps(maps_dir: &Path) -> Vec<MapInfo> {
 /// Load a map by name from the given directory. Returns a World or an error message.
 pub fn load_map(maps_dir: &Path, name: &str) -> Result<World, String> {
     let path = maps_dir.join(format!("{}.json", name));
-    let contents =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read map '{}': {}", name, e))?;
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read map '{}': {}", name, e))?;
     World::from_json(&contents)
 }
 

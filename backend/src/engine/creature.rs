@@ -746,7 +746,10 @@ mod tests {
         assert!(result);
         assert_eq!(c.spawn_food, 0);
         // Health should have been deducted
-        assert_eq!(c.health, MAX_HEALTH[CREATURE_BIG as usize] - SPAWN_HEALTH[CREATURE_BIG as usize]);
+        assert_eq!(
+            c.health,
+            MAX_HEALTH[CREATURE_BIG as usize] - SPAWN_HEALTH[CREATURE_BIG as usize]
+        );
     }
 
     #[test]
@@ -838,7 +841,7 @@ mod tests {
         // Small -> Small: invalid (CONVERSION_FOOD[0][0] = 0)
         assert!(!c.set_conversion_type(CREATURE_SMALL));
         assert_eq!(c.convert_type, CREATURE_BIG); // unchanged
-        // Invalid type index
+                                                  // Invalid type index
         assert!(!c.set_conversion_type(99));
     }
 

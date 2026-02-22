@@ -60,7 +60,7 @@ pub const EAT_RATE: [i32; CREATURE_TYPES] = [800, 400, 600, 0];
 
 // Attack damage per second [attacker][target]
 pub const HITPOINTS: [[i32; CREATURE_TYPES]; CREATURE_TYPES] = [
-    [0, 0, 1000, 0],      // Small attacks
+    [0, 0, 1000, 0],       // Small attacks
     [1500, 1500, 1500, 0], // Big attacks
     [0, 0, 0, 0],          // Flyer attacks (none)
     [0, 0, 0, 0],
@@ -69,16 +69,16 @@ pub const HITPOINTS: [[i32; CREATURE_TYPES]; CREATURE_TYPES] = [
 // Attack range [attacker][target]
 pub const ATTACK_DISTANCE: [[i32; CREATURE_TYPES]; CREATURE_TYPES] = [
     [0, 0, 768, 0],     // Small
-    [512, 512, 512, 0],  // Big
-    [0, 0, 0, 0],        // Flyer
+    [512, 512, 512, 0], // Big
+    [0, 0, 0, 0],       // Flyer
     [0, 0, 0, 0],
 ];
 
 // Conversion food needed [from][to]
 pub const CONVERSION_FOOD: [[i32; CREATURE_TYPES]; CREATURE_TYPES] = [
-    [0, 8000, 5000, 0],  // From Small
-    [8000, 0, 0, 0],     // From Big
-    [5000, 0, 0, 0],     // From Flyer
+    [0, 8000, 5000, 0], // From Small
+    [8000, 0, 0, 0],    // From Big
+    [5000, 0, 0, 0],    // From Flyer
     [0, 0, 0, 0],
 ];
 

@@ -6,14 +6,19 @@ edition = "2021"
 [dependencies]
 mlua = { version = "0.10", features = ["lua51", "vendored", "serialize"] }
 axum = { version = "0.8", features = ["ws"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower = { version = "0.5", features = ["util"] }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 rand = "0.8"
 futures = "0.3"
+argon2 = "0.5"
+jsonwebtoken = "9"
+chrono = { version = "0.4", features = ["serde"] }

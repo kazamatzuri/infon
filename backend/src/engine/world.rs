@@ -1,5 +1,5 @@
-use std::collections::{BinaryHeap, VecDeque};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, VecDeque};
 
 use rand::Rng;
 use serde::Deserialize;
@@ -196,7 +196,10 @@ impl World {
                         for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
                             let nx = (cx as i32 + dx) as usize;
                             let ny = (cy as i32 + dy) as usize;
-                            if nx >= 1 && nx < width - 1 && ny >= 1 && ny < height - 1
+                            if nx >= 1
+                                && nx < width - 1
+                                && ny >= 1
+                                && ny < height - 1
                                 && grid[ny][nx] == TILE_PLAIN
                                 && !visited[ny][nx]
                             {
@@ -250,8 +253,16 @@ impl World {
         let mut best_dist = usize::MAX;
         if !regions.is_empty() {
             for &(x, y) in &regions[largest_idx] {
-                let dx = if x >= center_x { x - center_x } else { center_x - x };
-                let dy = if y >= center_y { y - center_y } else { center_y - y };
+                let dx = if x >= center_x {
+                    x - center_x
+                } else {
+                    center_x - x
+                };
+                let dy = if y >= center_y {
+                    y - center_y
+                } else {
+                    center_y - y
+                };
                 let dist = dx * dx + dy * dy;
                 if dist < best_dist {
                     best_dist = dist;
@@ -287,7 +298,8 @@ impl World {
 
     /// Load a world from the JSON map format.
     pub fn from_json(json: &str) -> Result<Self, String> {
-        let map: MapJson = serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
+        let map: MapJson =
+            serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
 
         if map.width == 0 || map.height == 0 {
             return Err("World dimensions must be > 0".into());
@@ -454,7 +466,10 @@ impl World {
 
     /// Returns the center of the King of the Hill tile in pixel coordinates.
     pub fn koth_center_pixels(&self) -> (i32, i32) {
-        (Self::tile_center(self.koth_x), Self::tile_center(self.koth_y))
+        (
+            Self::tile_center(self.koth_x),
+            Self::tile_center(self.koth_y),
+        )
     }
 
     // --- Coordinate conversions ---

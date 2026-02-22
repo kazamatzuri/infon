@@ -224,7 +224,14 @@ impl Game {
     }
 
     /// Spawn a creature as an offspring of another creature.
-    fn spawn_offspring(&mut self, parent_id: u32, player_id: u32, x: i32, y: i32, creature_type: u8) -> Option<u32> {
+    fn spawn_offspring(
+        &mut self,
+        parent_id: u32,
+        player_id: u32,
+        x: i32,
+        y: i32,
+        creature_type: u8,
+    ) -> Option<u32> {
         let id = self.next_creature_id;
         self.next_creature_id += 1;
 
@@ -248,7 +255,11 @@ impl Game {
 
     /// Kill a creature. Queues kill event.
     pub fn kill_creature(&mut self, creature_id: u32, killer_id: Option<u32>) {
-        let creature = self.creatures.borrow().get(&creature_id).map(|c| (c.player_id, c.id));
+        let creature = self
+            .creatures
+            .borrow()
+            .get(&creature_id)
+            .map(|c| (c.player_id, c.id));
         if let Some((player_id, _)) = creature {
             self.pending_events
                 .entry(player_id)
@@ -390,7 +401,11 @@ impl Game {
 
         for pid in player_ids {
             // Take pending events for this player
-            let events = self.pending_events.get_mut(&pid).map(|e| std::mem::take(e)).unwrap_or_default();
+            let events = self
+                .pending_events
+                .get_mut(&pid)
+                .map(|e| std::mem::take(e))
+                .unwrap_or_default();
 
             // Build the Lua events table
             let player = match self.players.get(&pid) {
@@ -416,9 +431,7 @@ impl Game {
             // Set instruction count limit to prevent infinite loops
             let _ = player.lua.set_hook(
                 mlua::HookTriggers::new().every_nth_instruction(LUA_MAX_INSTRUCTIONS),
-                |_lua, _debug| {
-                    Err(mlua::Error::RuntimeError("lua vm cycles exceeded".into()))
-                },
+                |_lua, _debug| Err(mlua::Error::RuntimeError("lua vm cycles exceeded".into())),
             );
 
             // Build the events table in Lua
@@ -465,9 +478,7 @@ impl Game {
                 // Log the error but don't crash the game
                 tracing::warn!(player_id = pid, "Lua error in player_think: {e}");
                 let player = self.players.get_mut(&pid).unwrap();
-                player
-                    .output
-                    .push(format!("Lua error: {e}"));
+                player.output.push(format!("Lua error: {e}"));
             }
 
             lua_api::clear_game_state(&self.players.get(&pid).unwrap().lua);
@@ -709,13 +720,12 @@ impl Game {
 
         // Queue attack events
         for (target_id, target_player, attacker_id) in attack_events {
-            self.pending_events
-                .entry(target_player)
-                .or_default()
-                .push(GameEvent::CreatureAttacked {
+            self.pending_events.entry(target_player).or_default().push(
+                GameEvent::CreatureAttacked {
                     id: target_id,
                     attacker: attacker_id,
-                });
+                },
+            );
         }
 
         // Process kills from combat
@@ -961,7 +971,11 @@ mod tests {
         let creatures = game.creatures.borrow();
         let creature = creatures.get(&cid).unwrap();
         // Creature should have eaten some food
-        assert!(creature.food > 0, "Creature food should be > 0 after eating, got {}", creature.food);
+        assert!(
+            creature.food > 0,
+            "Creature food should be > 0 after eating, got {}",
+            creature.food
+        );
     }
 
     #[test]
@@ -998,7 +1012,10 @@ mod tests {
         // Creature should have moved closer to target
         let start_dist = ((cx - target_x).abs() + (cy - target_y).abs()) as i32;
         let end_dist = ((creature.x - target_x).abs() + (creature.y - target_y).abs()) as i32;
-        assert!(end_dist < start_dist, "Creature should have moved closer to target");
+        assert!(
+            end_dist < start_dist,
+            "Creature should have moved closer to target"
+        );
     }
 
     #[test]
@@ -1014,7 +1031,9 @@ mod tests {
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
         let attacker_id = game.spawn_creature(pid1, cx, cy, CREATURE_BIG).unwrap();
-        let target_id = game.spawn_creature(pid2, cx + 100, cy, CREATURE_SMALL).unwrap();
+        let target_id = game
+            .spawn_creature(pid2, cx + 100, cy, CREATURE_SMALL)
+            .unwrap();
 
         // Manually set the attacker to attack the target
         {
@@ -1032,7 +1051,10 @@ mod tests {
         // Target should have taken damage
         let creatures = game.creatures.borrow();
         if let Some(target) = creatures.get(&target_id) {
-            assert!(target.health < target_health_before, "Target should have taken damage");
+            assert!(
+                target.health < target_health_before,
+                "Target should have taken damage"
+            );
         }
         // (target might also be dead if damage is high enough)
     }
@@ -1053,7 +1075,10 @@ mod tests {
 
         // Player should have scored
         let score = *game.player_scores.borrow().get(&pid).unwrap_or(&0);
-        assert!(score > 0, "Player should have scored from koth, got {score}");
+        assert!(
+            score > 0,
+            "Player should have scored from koth, got {score}"
+        );
         assert_eq!(game.king_player_id, Some(pid));
     }
 
@@ -1155,8 +1180,15 @@ mod tests {
         // Error should appear in player output
         let snap = game.snapshot();
         let player = snap.players.iter().find(|p| p.id == pid).unwrap();
-        let has_error = player.output.iter().any(|line| line.contains("cycles exceeded"));
-        assert!(has_error, "Expected 'cycles exceeded' error in output, got: {:?}", player.output);
+        let has_error = player
+            .output
+            .iter()
+            .any(|line| line.contains("cycles exceeded"));
+        assert!(
+            has_error,
+            "Expected 'cycles exceeded' error in output, got: {:?}",
+            player.output
+        );
     }
 
     #[test]

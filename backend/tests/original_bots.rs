@@ -46,7 +46,9 @@ fn test_stupibot_runs_50_ticks() {
     let mut game = Game::new(world);
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
-    let player_id = game.add_player("stupibot", code, "oo").expect("Failed to add stupibot");
+    let player_id = game
+        .add_player("stupibot", code, "oo")
+        .expect("Failed to add stupibot");
 
     // Spawn a creature on a food tile
     let spawn_x = World::tile_center(5);
@@ -157,7 +159,9 @@ fn test_easybot_runs_100_ticks() {
     let mut game = Game::new(world);
 
     let code = include_str!("../../orig_game/contrib/bots/easybot.lua");
-    let player_id = game.add_player("easybot", code, "state").expect("Failed to add easybot");
+    let player_id = game
+        .add_player("easybot", code, "state")
+        .expect("Failed to add easybot");
 
     let spawn_x = World::tile_center(5);
     let spawn_y = World::tile_center(5);
@@ -192,8 +196,18 @@ fn test_stupibot_vs_stupibot() {
     let p2 = game.add_player("stupibot2_player", code, "oo").unwrap();
 
     // Spawn creatures for both players
-    game.spawn_creature(p1, World::tile_center(5), World::tile_center(5), CREATURE_SMALL);
-    game.spawn_creature(p2, World::tile_center(15), World::tile_center(15), CREATURE_SMALL);
+    game.spawn_creature(
+        p1,
+        World::tile_center(5),
+        World::tile_center(5),
+        CREATURE_SMALL,
+    );
+    game.spawn_creature(
+        p2,
+        World::tile_center(15),
+        World::tile_center(15),
+        CREATURE_SMALL,
+    );
 
     // Run 200 ticks (20 seconds of game time)
     for _ in 0..200 {
@@ -215,8 +229,18 @@ fn test_oo_vs_state_bots() {
     let p1 = game.add_player("stupibot", oo_code, "oo").unwrap();
     let p2 = game.add_player("easybot", state_code, "state").unwrap();
 
-    game.spawn_creature(p1, World::tile_center(5), World::tile_center(5), CREATURE_SMALL);
-    game.spawn_creature(p2, World::tile_center(15), World::tile_center(15), CREATURE_SMALL);
+    game.spawn_creature(
+        p1,
+        World::tile_center(5),
+        World::tile_center(5),
+        CREATURE_SMALL,
+    );
+    game.spawn_creature(
+        p2,
+        World::tile_center(15),
+        World::tile_center(15),
+        CREATURE_SMALL,
+    );
 
     for _ in 0..100 {
         game.tick();

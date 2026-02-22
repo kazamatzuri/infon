@@ -493,7 +493,9 @@ pub fn register_functions(lua: &Lua, _player_id: u32) -> LuaResult<()> {
                     Value::Boolean(b) => parts.push(b.to_string()),
                     Value::Integer(n) => parts.push(n.to_string()),
                     Value::Number(n) => parts.push(n.to_string()),
-                    Value::String(s) => parts.push(s.to_str().map(|s| s.to_string()).unwrap_or_default()),
+                    Value::String(s) => {
+                        parts.push(s.to_str().map(|s| s.to_string()).unwrap_or_default())
+                    }
                     other => parts.push(format!("{:?}", other)),
                 }
             }
@@ -518,7 +520,9 @@ pub fn register_functions(lua: &Lua, _player_id: u32) -> LuaResult<()> {
                     Value::Boolean(b) => parts.push(b.to_string()),
                     Value::Integer(n) => parts.push(n.to_string()),
                     Value::Number(n) => parts.push(n.to_string()),
-                    Value::String(s) => parts.push(s.to_str().map(|s| s.to_string()).unwrap_or_default()),
+                    Value::String(s) => {
+                        parts.push(s.to_str().map(|s| s.to_string()).unwrap_or_default())
+                    }
                     other => parts.push(format!("{:?}", other)),
                 }
             }
@@ -707,9 +711,7 @@ mod tests {
     #[test]
     fn test_lua_print() {
         let (lua, gs) = setup_test_lua();
-        lua.load(r#"print("hello", "world", 42)"#)
-            .exec()
-            .unwrap();
+        lua.load(r#"print("hello", "world", 42)"#).exec().unwrap();
 
         let gs_inner = gs.borrow();
         let output = gs_inner.print_output.borrow();

@@ -4,10 +4,26 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub email: String,
+    pub password_hash: Option<String>,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub role: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Bot {
     pub id: i64,
     pub name: String,
     pub description: String,
+    pub owner_id: Option<i64>,
+    pub visibility: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -69,12 +85,18 @@ impl Database {
     }
 
     async fn run_migrations(&self) -> Result<(), sqlx::Error> {
+        // Users table
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS bots (
+            CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT,
+                display_name TEXT,
+                avatar_url TEXT,
+                bio TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -82,6 +104,31 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS bots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                owner_id INTEGER REFERENCES users(id),
+                visibility TEXT NOT NULL DEFAULT 'public',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Add owner_id and visibility columns to existing bots table if missing
+        let _ = sqlx::query("ALTER TABLE bots ADD COLUMN owner_id INTEGER REFERENCES users(id)")
+            .execute(&self.pool)
+            .await;
+        let _ =
+            sqlx::query("ALTER TABLE bots ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
+                .execute(&self.pool)
+                .await;
 
         sqlx::query(
             r#"
@@ -148,14 +195,82 @@ impl Database {
         Ok(())
     }
 
+    // ── User CRUD ─────────────────────────────────────────────────────
+
+    pub async fn create_user(
+        &self,
+        username: &str,
+        email: &str,
+        password_hash: &str,
+        display_name: &str,
+    ) -> Result<User, sqlx::Error> {
+        let row = sqlx::query_as::<_, User>(
+            "INSERT INTO users (username, email, password_hash, display_name) VALUES (?, ?, ?, ?) RETURNING id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at",
+        )
+        .bind(username)
+        .bind(email)
+        .bind(password_hash)
+        .bind(display_name)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_user(&self, id: i64) -> Result<Option<User>, sqlx::Error> {
+        let row = sqlx::query_as::<_, User>(
+            "SELECT id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at FROM users WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, sqlx::Error> {
+        let row = sqlx::query_as::<_, User>(
+            "SELECT id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at FROM users WHERE username = ?",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_user(
+        &self,
+        id: i64,
+        display_name: Option<&str>,
+        bio: Option<&str>,
+    ) -> Result<Option<User>, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE users SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio), updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(display_name)
+        .bind(bio)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_user(id).await
+    }
+
     // ── Bot CRUD ──────────────────────────────────────────────────────
 
-    pub async fn create_bot(&self, name: &str, description: &str) -> Result<Bot, sqlx::Error> {
+    pub async fn create_bot(
+        &self,
+        name: &str,
+        description: &str,
+        owner_id: Option<i64>,
+    ) -> Result<Bot, sqlx::Error> {
         let row = sqlx::query_as::<_, Bot>(
-            "INSERT INTO bots (name, description) VALUES (?, ?) RETURNING id, name, description, created_at, updated_at",
+            "INSERT INTO bots (name, description, owner_id) VALUES (?, ?, ?) RETURNING id, name, description, owner_id, visibility, created_at, updated_at",
         )
         .bind(name)
         .bind(description)
+        .bind(owner_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -163,15 +278,25 @@ impl Database {
 
     pub async fn list_bots(&self) -> Result<Vec<Bot>, sqlx::Error> {
         let rows =
-            sqlx::query_as::<_, Bot>("SELECT id, name, description, created_at, updated_at FROM bots ORDER BY id")
+            sqlx::query_as::<_, Bot>("SELECT id, name, description, owner_id, visibility, created_at, updated_at FROM bots ORDER BY id")
                 .fetch_all(&self.pool)
                 .await?;
         Ok(rows)
     }
 
+    pub async fn list_bots_by_owner(&self, owner_id: i64) -> Result<Vec<Bot>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Bot>(
+            "SELECT id, name, description, owner_id, visibility, created_at, updated_at FROM bots WHERE owner_id = ? ORDER BY id",
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn get_bot(&self, id: i64) -> Result<Option<Bot>, sqlx::Error> {
         let row = sqlx::query_as::<_, Bot>(
-            "SELECT id, name, description, created_at, updated_at FROM bots WHERE id = ?",
+            "SELECT id, name, description, owner_id, visibility, created_at, updated_at FROM bots WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -201,6 +326,25 @@ impl Database {
         self.get_bot(id).await
     }
 
+    pub async fn update_bot_visibility(
+        &self,
+        id: i64,
+        visibility: &str,
+    ) -> Result<Option<Bot>, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bots SET visibility = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(visibility)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_bot(id).await
+    }
+
     pub async fn delete_bot(&self, id: i64) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM bots WHERE id = ?")
             .bind(id)
@@ -218,12 +362,11 @@ impl Database {
         api_type: &str,
     ) -> Result<BotVersion, sqlx::Error> {
         // Determine next version number for this bot
-        let max_version: Option<i32> = sqlx::query_scalar(
-            "SELECT MAX(version) FROM bot_versions WHERE bot_id = ?",
-        )
-        .bind(bot_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let max_version: Option<i32> =
+            sqlx::query_scalar("SELECT MAX(version) FROM bot_versions WHERE bot_id = ?")
+                .bind(bot_id)
+                .fetch_one(&self.pool)
+                .await?;
 
         let next_version = max_version.unwrap_or(0) + 1;
 
@@ -417,14 +560,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_and_get_user() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("testuser", "test@example.com", "hashedpw", "Test User")
+            .await
+            .unwrap();
+        assert_eq!(user.username, "testuser");
+        assert_eq!(user.email, "test@example.com");
+        assert_eq!(user.role, "user");
+
+        let fetched = db.get_user(user.id).await.unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().username, "testuser");
+
+        let by_name = db.get_user_by_username("testuser").await.unwrap();
+        assert!(by_name.is_some());
+
+        let missing = db.get_user_by_username("nonexistent").await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_user_unique_constraints() {
+        let db = test_db().await;
+
+        db.create_user("user1", "a@b.com", "hash", "User 1")
+            .await
+            .unwrap();
+
+        // Duplicate username
+        let result = db
+            .create_user("user1", "c@d.com", "hash", "User 1 dup")
+            .await;
+        assert!(result.is_err());
+
+        // Duplicate email
+        let result = db.create_user("user2", "a@b.com", "hash", "User 2").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_create_and_list_bots() {
         let db = test_db().await;
 
-        let bot1 = db.create_bot("Bot1", "First bot").await.unwrap();
+        let bot1 = db.create_bot("Bot1", "First bot", None).await.unwrap();
         assert_eq!(bot1.name, "Bot1");
         assert_eq!(bot1.description, "First bot");
 
-        let bot2 = db.create_bot("Bot2", "Second bot").await.unwrap();
+        let bot2 = db.create_bot("Bot2", "Second bot", None).await.unwrap();
         assert_eq!(bot2.name, "Bot2");
 
         let bots = db.list_bots().await.unwrap();
@@ -441,14 +626,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bots_with_owner() {
+        let db = test_db().await;
+
+        let user = db
+            .create_user("owner", "owner@test.com", "hash", "Owner")
+            .await
+            .unwrap();
+
+        let bot = db
+            .create_bot("OwnedBot", "desc", Some(user.id))
+            .await
+            .unwrap();
+        assert_eq!(bot.owner_id, Some(user.id));
+        assert_eq!(bot.visibility, "public");
+
+        let user_bots = db.list_bots_by_owner(user.id).await.unwrap();
+        assert_eq!(user_bots.len(), 1);
+        assert_eq!(user_bots[0].name, "OwnedBot");
+    }
+
+    #[tokio::test]
     async fn test_update_bot() {
         let db = test_db().await;
 
-        let bot = db.create_bot("Original", "desc").await.unwrap();
-        let updated = db
-            .update_bot(bot.id, "Updated", "new desc")
-            .await
-            .unwrap();
+        let bot = db.create_bot("Original", "desc", None).await.unwrap();
+        let updated = db.update_bot(bot.id, "Updated", "new desc").await.unwrap();
         assert!(updated.is_some());
         let updated = updated.unwrap();
         assert_eq!(updated.name, "Updated");
@@ -462,7 +665,7 @@ mod tests {
     async fn test_delete_bot() {
         let db = test_db().await;
 
-        let bot = db.create_bot("ToDelete", "").await.unwrap();
+        let bot = db.create_bot("ToDelete", "", None).await.unwrap();
         assert!(db.delete_bot(bot.id).await.unwrap());
         assert!(!db.delete_bot(bot.id).await.unwrap());
 
@@ -474,7 +677,7 @@ mod tests {
     async fn test_bot_versions() {
         let db = test_db().await;
 
-        let bot = db.create_bot("VersionBot", "").await.unwrap();
+        let bot = db.create_bot("VersionBot", "", None).await.unwrap();
 
         let v1 = db
             .create_bot_version(bot.id, "print('v1')", "oo")
@@ -515,10 +718,7 @@ mod tests {
         let fetched = db.get_tournament(t.id).await.unwrap();
         assert!(fetched.is_some());
 
-        assert!(db
-            .update_tournament_status(t.id, "running")
-            .await
-            .unwrap());
+        assert!(db.update_tournament_status(t.id, "running").await.unwrap());
         let updated = db.get_tournament(t.id).await.unwrap().unwrap();
         assert_eq!(updated.status, "running");
 
@@ -529,11 +729,8 @@ mod tests {
     async fn test_tournament_entries() {
         let db = test_db().await;
 
-        let bot = db.create_bot("EntryBot", "").await.unwrap();
-        let v = db
-            .create_bot_version(bot.id, "code", "oo")
-            .await
-            .unwrap();
+        let bot = db.create_bot("EntryBot", "", None).await.unwrap();
+        let v = db.create_bot_version(bot.id, "code", "oo").await.unwrap();
         let t = db.create_tournament("T", "default").await.unwrap();
 
         let entry = db

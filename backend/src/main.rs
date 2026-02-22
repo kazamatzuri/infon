@@ -1,10 +1,14 @@
 mod api;
+mod auth;
 mod db;
 mod engine;
 
-use std::sync::Arc;
-use axum::{routing::get, Json, Router};
+use axum::{
+    routing::{get, post},
+    Json, Router,
+};
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 use engine::server::GameServer;
@@ -17,8 +21,8 @@ async fn health_check() -> Json<Value> {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite:infon.db?mode=rwc".to_string());
+    let db_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:infon.db?mode=rwc".to_string());
     let db = db::Database::new(&db_url)
         .await
         .expect("Failed to initialize database");
@@ -28,6 +32,11 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health_check))
+        // Auth routes (no auth required)
+        .route("/api/auth/register", post(auth::register))
+        .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/me", get(auth::me))
+        .with_state(db.clone())
         .merge(api::router(db, game_server))
         .layer(CorsLayer::permissive());
 

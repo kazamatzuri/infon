@@ -11,10 +11,7 @@ use axum::{
 use super::AppState;
 
 /// WebSocket upgrade handler for game state streaming.
-pub async fn ws_game(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_game(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
