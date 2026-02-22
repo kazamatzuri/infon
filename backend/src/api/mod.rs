@@ -261,12 +261,12 @@ async fn list_bots(
     let show_all = params.all.unwrap_or(false);
     let result = if !show_all {
         if let Some(claims) = auth.0 {
-            state.db.list_bots_by_owner(claims.sub).await
+            state.db.list_bot_summaries_by_owner(claims.sub).await
         } else {
-            state.db.list_bots().await
+            state.db.list_bot_summaries().await
         }
     } else {
-        state.db.list_bots().await
+        state.db.list_bot_summaries().await
     };
 
     match result {

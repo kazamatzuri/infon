@@ -29,6 +29,22 @@ pub struct Bot {
     pub updated_at: String,
 }
 
+/// Enriched bot info for the library view, includes version stats.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct BotSummary {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub owner_id: Option<i64>,
+    pub owner_username: Option<String>,
+    pub visibility: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version_count: i32,
+    pub latest_version: Option<i32>,
+    pub latest_elo_1v1: Option<i32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct BotVersion {
     pub id: i64,
@@ -577,6 +593,73 @@ impl Database {
     pub async fn list_bots_by_owner(&self, owner_id: i64) -> Result<Vec<Bot>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Bot>(
             "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE owner_id = ? ORDER BY id",
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// List all bots with enriched summary data (version count, latest version, Elo).
+    pub async fn list_bot_summaries(&self) -> Result<Vec<BotSummary>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, BotSummary>(
+            r#"
+            SELECT
+                b.id, b.name, b.description, b.owner_id,
+                u.username AS owner_username,
+                b.visibility, b.created_at, b.updated_at,
+                COALESCE(vs.cnt, 0) AS version_count,
+                vs.max_version AS latest_version,
+                vs.latest_elo AS latest_elo_1v1
+            FROM bots b
+            LEFT JOIN users u ON u.id = b.owner_id
+            LEFT JOIN (
+                SELECT bot_id,
+                       COUNT(*) AS cnt,
+                       MAX(version) AS max_version,
+                       (SELECT bv2.elo_1v1 FROM bot_versions bv2
+                        WHERE bv2.bot_id = bv.bot_id
+                        ORDER BY bv2.version DESC LIMIT 1) AS latest_elo
+                FROM bot_versions bv
+                GROUP BY bot_id
+            ) vs ON vs.bot_id = b.id
+            ORDER BY b.updated_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// List bots by owner with enriched summary data.
+    pub async fn list_bot_summaries_by_owner(
+        &self,
+        owner_id: i64,
+    ) -> Result<Vec<BotSummary>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, BotSummary>(
+            r#"
+            SELECT
+                b.id, b.name, b.description, b.owner_id,
+                u.username AS owner_username,
+                b.visibility, b.created_at, b.updated_at,
+                COALESCE(vs.cnt, 0) AS version_count,
+                vs.max_version AS latest_version,
+                vs.latest_elo AS latest_elo_1v1
+            FROM bots b
+            LEFT JOIN users u ON u.id = b.owner_id
+            LEFT JOIN (
+                SELECT bot_id,
+                       COUNT(*) AS cnt,
+                       MAX(version) AS max_version,
+                       (SELECT bv2.elo_1v1 FROM bot_versions bv2
+                        WHERE bv2.bot_id = bv.bot_id
+                        ORDER BY bv2.version DESC LIMIT 1) AS latest_elo
+                FROM bot_versions bv
+                GROUP BY bot_id
+            ) vs ON vs.bot_id = b.id
+            WHERE b.owner_id = ?
+            ORDER BY b.updated_at DESC
+            "#,
         )
         .bind(owner_id)
         .fetch_all(&self.pool)

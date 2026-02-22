@@ -13,10 +13,14 @@ export interface Bot {
   name: string;
   description: string;
   owner_id: number | null;
+  owner_username?: string | null;
   visibility: string;
-  active_version_id: number | null;
+  active_version_id?: number | null;
   created_at: string;
   updated_at: string;
+  version_count?: number;
+  latest_version?: number | null;
+  latest_elo_1v1?: number | null;
 }
 
 export interface BotVersion {

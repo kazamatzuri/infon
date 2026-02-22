@@ -37,6 +37,7 @@ export function ApiKeys() {
   // Newly created token (shown once)
   const [newToken, setNewToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [confirmingRevoke, setConfirmingRevoke] = useState<number | null>(null);
 
   const fetchKeys = useCallback(async () => {
     try {
@@ -80,7 +81,11 @@ export function ApiKeys() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to revoke this API key?')) return;
+    if (confirmingRevoke !== id) {
+      setConfirmingRevoke(id);
+      return;
+    }
+    setConfirmingRevoke(null);
     try {
       await api.deleteApiKey(id);
       setKeys(keys.filter(k => k.id !== id));
@@ -210,12 +215,29 @@ export function ApiKeys() {
                   {new Date(k.created_at + 'Z').toLocaleDateString()}
                 </td>
                 <td style={{ padding: 8 }}>
-                  <button
-                    onClick={() => handleDelete(k.id)}
-                    style={{ padding: '4px 12px', fontSize: 12, color: '#f44', cursor: 'pointer' }}
-                  >
-                    Revoke
-                  </button>
+                  {confirmingRevoke === k.id ? (
+                    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <button
+                        onClick={() => handleDelete(k.id)}
+                        style={{ padding: '4px 12px', fontSize: 12, background: '#e94560', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => setConfirmingRevoke(null)}
+                        style={{ padding: '4px 8px', fontSize: 11, color: '#888', border: '1px solid #555', background: 'transparent', borderRadius: 4, cursor: 'pointer' }}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleDelete(k.id)}
+                      style={{ padding: '4px 12px', fontSize: 12, color: '#f44', cursor: 'pointer' }}
+                    >
+                      Revoke
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

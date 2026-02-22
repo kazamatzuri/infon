@@ -28,6 +28,7 @@ export function Teams() {
   const [selectedVersionA, setSelectedVersionA] = useState<number | ''>('');
   const [selectedVersionB, setSelectedVersionB] = useState<number | ''>('');
   const [creatingVersion, setCreatingVersion] = useState(false);
+  const [confirmingDeleteTeam, setConfirmingDeleteTeam] = useState<number | null>(null);
 
   const fetchTeams = useCallback(async () => {
     try {
@@ -86,7 +87,11 @@ export function Teams() {
   };
 
   const handleDeleteTeam = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this team?')) return;
+    if (confirmingDeleteTeam !== id) {
+      setConfirmingDeleteTeam(id);
+      return;
+    }
+    setConfirmingDeleteTeam(null);
     try {
       await api.deleteTeam(id);
       setTeams(prev => prev.filter(t => t.id !== id));
@@ -202,12 +207,29 @@ export function Teams() {
                   >
                     {team.name}
                   </span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDeleteTeam(team.id); }}
-                    style={{ padding: '2px 8px', fontSize: 12, color: '#f44', cursor: 'pointer' }}
-                  >
-                    Delete
-                  </button>
+                  {confirmingDeleteTeam === team.id ? (
+                    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteTeam(team.id); }}
+                        style={{ padding: '2px 8px', fontSize: 12, background: '#e94560', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmingDeleteTeam(null); }}
+                        style={{ padding: '2px 8px', fontSize: 11, color: '#888', border: '1px solid #555', background: 'transparent', borderRadius: 4, cursor: 'pointer' }}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteTeam(team.id); }}
+                      style={{ padding: '2px 8px', fontSize: 12, color: '#f44', cursor: 'pointer' }}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
