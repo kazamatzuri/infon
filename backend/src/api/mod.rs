@@ -49,6 +49,14 @@ pub struct CreateTournamentRequest {
 }
 
 #[derive(Deserialize)]
+pub struct UpdateTournamentRequest {
+    pub name: Option<String>,
+    pub map: Option<String>,
+    pub format: Option<String>,
+    pub config: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct AddTournamentEntryRequest {
     pub bot_version_id: i64,
     pub slot_name: Option<String>,
@@ -176,6 +184,7 @@ pub fn router(
         .route("/api/matches", get(list_matches))
         .route("/api/matches/challenge", post(create_challenge))
         .route("/api/matches/{id}", get(get_match))
+        .route("/api/matches/{id}/replay", get(get_match_replay))
         // Queue
         .route("/api/queue/status", get(queue_status))
         // Tournaments
@@ -183,7 +192,14 @@ pub fn router(
             "/api/tournaments",
             get(list_tournaments).post(create_tournament),
         )
-        .route("/api/tournaments/{id}", get(get_tournament))
+        .route(
+            "/api/tournaments/{id}",
+            get(get_tournament).put(update_tournament),
+        )
+        .route(
+            "/api/tournaments/{id}/standings",
+            get(get_tournament_standings),
+        )
         // Tournament entries
         .route(
             "/api/tournaments/{id}/entries",
@@ -455,6 +471,62 @@ async fn get_match(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
         .into_response()
 }
 
+// ── Replay handler ────────────────────────────────────────────────────
+
+async fn get_match_replay(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+    // Check match exists
+    match state.db.get_match(id).await {
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Match not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+        Ok(Some(_)) => {}
+    }
+
+    let replay = match state.db.get_replay(id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return json_error(StatusCode::NOT_FOUND, "Replay not found for this match")
+                .into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // Decompress the replay data
+    let json_str = match crate::replay::decompress_replay(&replay.data) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to decompress replay: {e}");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to decompress replay",
+            )
+            .into_response();
+        }
+    };
+
+    // Parse the messages array from the decompressed JSON
+    let messages: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("Failed to parse replay JSON: {e}");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to parse replay data",
+            )
+            .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "match_id": replay.match_id,
+            "tick_count": replay.tick_count,
+            "messages": messages,
+        })),
+    )
+        .into_response()
+}
+
 // ── Tournament handlers ───────────────────────────────────────────────
 
 async fn list_tournaments(State(state): State<AppState>) -> impl IntoResponse {
@@ -482,6 +554,55 @@ async fn get_tournament(State(state): State<AppState>, Path(id): Path<i64>) -> i
     match state.db.get_tournament(id).await {
         Ok(Some(tournament)) => (StatusCode::OK, Json(json!(tournament))).into_response(),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "Tournament not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn update_tournament(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateTournamentRequest>,
+) -> impl IntoResponse {
+    // Validate format if provided
+    if let Some(ref fmt) = req.format {
+        if crate::tournament::TournamentFormat::from_str_name(fmt).is_none() {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Invalid format. Use 'round_robin', 'single_elimination', or 'swiss_N'",
+            )
+            .into_response();
+        }
+    }
+    match state
+        .db
+        .update_tournament(
+            id,
+            req.name.as_deref(),
+            req.map.as_deref(),
+            req.format.as_deref(),
+            req.config.as_deref(),
+        )
+        .await
+    {
+        Ok(Some(tournament)) => (StatusCode::OK, Json(json!(tournament))).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Tournament not found").into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn get_tournament_standings(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.get_tournament(id).await {
+        Ok(None) => {
+            return json_error(StatusCode::NOT_FOUND, "Tournament not found").into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match state.db.get_tournament_standings(id).await {
+        Ok(standings) => (StatusCode::OK, Json(json!(standings))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
 }

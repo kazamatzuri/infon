@@ -86,7 +86,20 @@ pub struct Tournament {
     pub status: String,
     pub map: String,
     pub config: String,
+    pub format: String,
+    pub current_round: i32,
+    pub total_rounds: i32,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TournamentStanding {
+    pub bot_version_id: i64,
+    pub bot_name: String,
+    pub total_score: i64,
+    pub matches_played: i32,
+    pub wins: i32,
+    pub losses: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -132,6 +145,15 @@ pub struct ApiToken {
     pub token_hash: String,
     pub scopes: String,
     pub last_used_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Replay {
+    pub id: i64,
+    pub match_id: i64,
+    pub data: Vec<u8>,
+    pub tick_count: i32,
     pub created_at: String,
 }
 
@@ -327,6 +349,17 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // Add new columns to existing tournaments table if missing
+        for col in &[
+            "format TEXT NOT NULL DEFAULT 'round_robin'",
+            "current_round INTEGER NOT NULL DEFAULT 0",
+            "total_rounds INTEGER NOT NULL DEFAULT 1",
+        ] {
+            let _ = sqlx::query(&format!("ALTER TABLE tournaments ADD COLUMN {col}"))
+                .execute(&self.pool)
+                .await;
+        }
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS tournament_entries (
@@ -387,6 +420,21 @@ impl Database {
                 draws INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(team_id, version)
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Replays table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS replays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL UNIQUE REFERENCES matches(id) ON DELETE CASCADE,
+                data BLOB NOT NULL,
+                tick_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         "#,
         )
@@ -860,7 +908,7 @@ impl Database {
         map: &str,
     ) -> Result<Tournament, sqlx::Error> {
         let row = sqlx::query_as::<_, Tournament>(
-            "INSERT INTO tournaments (name, map) VALUES (?, ?) RETURNING id, name, status, map, config, created_at",
+            "INSERT INTO tournaments (name, map) VALUES (?, ?) RETURNING id, name, status, map, config, format, current_round, total_rounds, created_at",
         )
         .bind(name)
         .bind(map)
@@ -871,7 +919,7 @@ impl Database {
 
     pub async fn list_tournaments(&self) -> Result<Vec<Tournament>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Tournament>(
-            "SELECT id, name, status, map, config, created_at FROM tournaments ORDER BY id",
+            "SELECT id, name, status, map, config, format, current_round, total_rounds, created_at FROM tournaments ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -880,7 +928,7 @@ impl Database {
 
     pub async fn get_tournament(&self, id: i64) -> Result<Option<Tournament>, sqlx::Error> {
         let row = sqlx::query_as::<_, Tournament>(
-            "SELECT id, name, status, map, config, created_at FROM tournaments WHERE id = ?",
+            "SELECT id, name, status, map, config, format, current_round, total_rounds, created_at FROM tournaments WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -899,6 +947,115 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_tournament_round(&self, id: i64, round: i32) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("UPDATE tournaments SET current_round = ? WHERE id = ?")
+            .bind(round)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_tournament(
+        &self,
+        id: i64,
+        name: Option<&str>,
+        map: Option<&str>,
+        format: Option<&str>,
+        config: Option<&str>,
+    ) -> Result<Option<Tournament>, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE tournaments SET name = COALESCE(?, name), map = COALESCE(?, map), format = COALESCE(?, format), config = COALESCE(?, config) WHERE id = ?",
+        )
+        .bind(name)
+        .bind(map)
+        .bind(format)
+        .bind(config)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_tournament(id).await
+    }
+
+    pub async fn get_tournament_standings(
+        &self,
+        tournament_id: i64,
+    ) -> Result<Vec<TournamentStanding>, sqlx::Error> {
+        // Aggregate results by bot_version_id, joining with bots table for name
+        let rows = sqlx::query_as::<_, (i64, String, i64, i32)>(
+            r#"
+            SELECT
+                tr.bot_version_id,
+                COALESCE(b.name, 'Unknown') AS bot_name,
+                COALESCE(SUM(tr.final_score), 0) AS total_score,
+                COUNT(*) AS matches_played
+            FROM tournament_results tr
+            JOIN bot_versions bv ON bv.id = tr.bot_version_id
+            JOIN bots b ON b.id = bv.bot_id
+            WHERE tr.tournament_id = ?
+            GROUP BY tr.bot_version_id
+            ORDER BY total_score DESC
+            "#,
+        )
+        .bind(tournament_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Compute wins/losses from the results
+        // A "win" means the bot had the highest score in a given result batch
+        // For simplicity, we compute wins as the count of times this bot had the
+        // max score among results with the same finished_at timestamp
+        let all_results = self.get_tournament_results(tournament_id).await?;
+
+        // Group results by finished_at (each game produces results with same timestamp)
+        let mut games: std::collections::HashMap<String, Vec<&TournamentResult>> =
+            std::collections::HashMap::new();
+        for r in &all_results {
+            games.entry(r.finished_at.clone()).or_default().push(r);
+        }
+
+        // Count wins/losses per bot_version_id
+        let mut wins_map: std::collections::HashMap<i64, i32> = std::collections::HashMap::new();
+        let mut losses_map: std::collections::HashMap<i64, i32> = std::collections::HashMap::new();
+        for game_results in games.values() {
+            if game_results.is_empty() {
+                continue;
+            }
+            let max_score = game_results
+                .iter()
+                .map(|r| r.final_score)
+                .max()
+                .unwrap_or(0);
+            for r in game_results {
+                if r.final_score == max_score {
+                    *wins_map.entry(r.bot_version_id).or_default() += 1;
+                } else {
+                    *losses_map.entry(r.bot_version_id).or_default() += 1;
+                }
+            }
+        }
+
+        let standings = rows
+            .into_iter()
+            .map(
+                |(bot_version_id, bot_name, total_score, matches_played)| TournamentStanding {
+                    bot_version_id,
+                    bot_name,
+                    total_score,
+                    matches_played,
+                    wins: *wins_map.get(&bot_version_id).unwrap_or(&0),
+                    losses: *losses_map.get(&bot_version_id).unwrap_or(&0),
+                },
+            )
+            .collect();
+
+        Ok(standings)
     }
 
     // ── Tournament Entries ────────────────────────────────────────────
@@ -1230,6 +1387,35 @@ impl Database {
                 .execute(&self.pool)
                 .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    // ── Replay CRUD ──────────────────────────────────────────────────
+
+    pub async fn save_replay(
+        &self,
+        match_id: i64,
+        data: &[u8],
+        tick_count: i32,
+    ) -> Result<Replay, sqlx::Error> {
+        let row = sqlx::query_as::<_, Replay>(
+            "INSERT INTO replays (match_id, data, tick_count) VALUES (?, ?, ?) RETURNING id, match_id, data, tick_count, created_at",
+        )
+        .bind(match_id)
+        .bind(data)
+        .bind(tick_count)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_replay(&self, match_id: i64) -> Result<Option<Replay>, sqlx::Error> {
+        let row = sqlx::query_as::<_, Replay>(
+            "SELECT id, match_id, data, tick_count, created_at FROM replays WHERE match_id = ?",
+        )
+        .bind(match_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
     }
 }
 
@@ -1832,6 +2018,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_save_and_get_replay() {
+        let db = test_db().await;
+
+        let m = db.create_match("1v1", "random").await.unwrap();
+
+        let data = vec![1, 2, 3, 4, 5];
+        let replay = db.save_replay(m.id, &data, 42).await.unwrap();
+        assert_eq!(replay.match_id, m.id);
+        assert_eq!(replay.data, data);
+        assert_eq!(replay.tick_count, 42);
+
+        let fetched = db.get_replay(m.id).await.unwrap();
+        assert!(fetched.is_some());
+        let fetched = fetched.unwrap();
+        assert_eq!(fetched.match_id, m.id);
+        assert_eq!(fetched.data, data);
+        assert_eq!(fetched.tick_count, 42);
+
+        // No replay for non-existent match
+        let missing = db.get_replay(999).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
     async fn test_api_token_unique_hashes() {
         let db = test_db().await;
 
@@ -1854,5 +2064,84 @@ mod tests {
 
         let tokens = db.list_api_tokens(user.id).await.unwrap();
         assert_eq!(tokens.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_tournament_standings() {
+        let db = test_db().await;
+
+        // Create bots and versions
+        let bot_a = db.create_bot("StandingsA", "", None).await.unwrap();
+        let va = db
+            .create_bot_version(bot_a.id, "code_a", "oo")
+            .await
+            .unwrap();
+        let bot_b = db.create_bot("StandingsB", "", None).await.unwrap();
+        let vb = db
+            .create_bot_version(bot_b.id, "code_b", "oo")
+            .await
+            .unwrap();
+
+        // Create tournament
+        let t = db
+            .create_tournament("StandingsTest", "default")
+            .await
+            .unwrap();
+        assert_eq!(t.format, "round_robin");
+        assert_eq!(t.current_round, 0);
+        assert_eq!(t.total_rounds, 1);
+
+        // Add results simulating two games
+        db.add_tournament_result(t.id, 0, va.id, 150, 10, 5, 3)
+            .await
+            .unwrap();
+        db.add_tournament_result(t.id, 1, vb.id, 80, 8, 3, 5)
+            .await
+            .unwrap();
+
+        let standings = db.get_tournament_standings(t.id).await.unwrap();
+        assert_eq!(standings.len(), 2);
+        // Ordered by total_score DESC
+        assert_eq!(standings[0].bot_name, "StandingsA");
+        assert_eq!(standings[0].total_score, 150);
+        assert_eq!(standings[0].matches_played, 1);
+        assert_eq!(standings[1].bot_name, "StandingsB");
+        assert_eq!(standings[1].total_score, 80);
+        assert_eq!(standings[1].matches_played, 1);
+    }
+
+    #[tokio::test]
+    async fn test_tournament_update() {
+        let db = test_db().await;
+
+        let t = db.create_tournament("UpdateMe", "default").await.unwrap();
+        assert_eq!(t.format, "round_robin");
+
+        let updated = db
+            .update_tournament(
+                t.id,
+                Some("NewName"),
+                None,
+                Some("single_elimination"),
+                None,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "NewName");
+        assert_eq!(updated.format, "single_elimination");
+        assert_eq!(updated.map, "default"); // unchanged
+
+        // Update round
+        assert!(db.update_tournament_round(t.id, 2).await.unwrap());
+        let fetched = db.get_tournament(t.id).await.unwrap().unwrap();
+        assert_eq!(fetched.current_round, 2);
+
+        // Not found
+        let missing = db
+            .update_tournament(999, Some("X"), None, None, None)
+            .await
+            .unwrap();
+        assert!(missing.is_none());
     }
 }

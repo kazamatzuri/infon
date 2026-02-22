@@ -6,6 +6,8 @@ mod engine;
 mod llms_txt;
 mod queue;
 mod rate_limit;
+mod replay;
+mod tournament;
 
 use axum::{
     routing::{get, post},

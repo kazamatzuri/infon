@@ -32,6 +32,9 @@ export interface Tournament {
   name: string;
   status: string;
   map: string;
+  format: string;
+  current_round: number;
+  total_rounds: number;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +46,15 @@ export interface TournamentEntry {
   slot_name: string;
   bot_name?: string;
   version?: number;
+}
+
+export interface TournamentStanding {
+  bot_version_id: number;
+  bot_name: string;
+  total_score: number;
+  matches_played: number;
+  wins: number;
+  losses: number;
 }
 
 export interface LeaderboardEntry {
@@ -63,6 +75,37 @@ export interface MapInfo {
   width: number;
   height: number;
   description: string;
+}
+
+export interface MatchDetail {
+  match: {
+    id: number;
+    format: string;
+    map: string;
+    status: string;
+    winner_bot_version_id: number | null;
+    created_at: string;
+    finished_at: string | null;
+  };
+  participants: {
+    id: number;
+    match_id: number;
+    bot_version_id: number;
+    player_slot: number;
+    final_score: number;
+    placement: number | null;
+    elo_before: number | null;
+    elo_after: number | null;
+    creatures_spawned: number;
+    creatures_killed: number;
+    creatures_lost: number;
+  }[];
+}
+
+export interface ReplayData {
+  match_id: number;
+  tick_count: number;
+  messages: GameMessage[];
 }
 
 export interface TournamentResult {
@@ -193,6 +236,16 @@ export const api = {
   getTournament: (id: number): Promise<Tournament> =>
     fetch(`${BASE_URL}/api/tournaments/${id}`, { headers: authHeaders() }).then(r => handleResponse<Tournament>(r)),
 
+  updateTournament: (id: number, data: { name?: string; map?: string; format?: string; config?: string }): Promise<Tournament> =>
+    fetch(`${BASE_URL}/api/tournaments/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    }).then(r => handleResponse<Tournament>(r)),
+
+  getStandings: (tournamentId: number): Promise<TournamentStanding[]> =>
+    fetch(`${BASE_URL}/api/tournaments/${tournamentId}/standings`, { headers: authHeaders() }).then(r => handleResponse<TournamentStanding[]>(r)),
+
   listEntries: (tournamentId: number): Promise<TournamentEntry[]> =>
     fetch(`${BASE_URL}/api/tournaments/${tournamentId}/entries`, { headers: authHeaders() }).then(r => handleResponse<TournamentEntry[]>(r)),
 
@@ -250,4 +303,15 @@ export const api = {
   leaderboard2v2: (limit = 50, offset = 0): Promise<LeaderboardEntry[]> =>
     fetch(`${BASE_URL}/api/leaderboards/2v2?limit=${limit}&offset=${offset}`, { headers: authHeaders() })
       .then(r => handleResponse<LeaderboardEntry[]>(r)),
+
+  // Match detail & replay
+  getMatch: (id: number): Promise<MatchDetail> =>
+    fetch(`${BASE_URL}/api/matches/${id}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail>(r)),
+
+  getReplay: (matchId: number): Promise<ReplayData> =>
+    fetch(`${BASE_URL}/api/matches/${matchId}/replay`, { headers: authHeaders() }).then(r => handleResponse<ReplayData>(r)),
+
+  // Match listing
+  listMatches: (limit = 20): Promise<MatchDetail['match'][]> =>
+    fetch(`${BASE_URL}/api/matches?limit=${limit}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),
 };

@@ -9,6 +9,7 @@ import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Leaderboard } from './pages/Leaderboard';
 import { ApiKeys } from './pages/ApiKeys';
+import { MatchDetail } from './pages/MatchDetail';
 import './App.css';
 
 function NavBar() {
@@ -57,6 +58,7 @@ function App() {
               <Route path="/tournaments" element={<TournamentList />} />
               <Route path="/tournaments/:id" element={<TournamentDetail />} />
               <Route path="/game" element={<GameViewer />} />
+              <Route path="/matches/:id" element={<MatchDetail />} />
               <Route path="/api-keys" element={<ApiKeys />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />

@@ -6,3 +6,5 @@ pub mod engine;
 pub mod llms_txt;
 pub mod queue;
 pub mod rate_limit;
+pub mod replay;
+pub mod tournament;

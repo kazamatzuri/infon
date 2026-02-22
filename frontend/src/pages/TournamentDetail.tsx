@@ -1,7 +1,24 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { Tournament, TournamentEntry, TournamentResult, Bot, BotVersion } from '../api/client';
+import type { Tournament, TournamentEntry, TournamentResult, TournamentStanding, Bot, BotVersion } from '../api/client';
+
+const FORMAT_OPTIONS = [
+  { value: 'round_robin', label: 'Round Robin' },
+  { value: 'single_elimination', label: 'Single Elimination' },
+  { value: 'swiss_3', label: 'Swiss (3 rounds)' },
+  { value: 'swiss_5', label: 'Swiss (5 rounds)' },
+];
+
+function formatLabel(format: string): string {
+  const found = FORMAT_OPTIONS.find(f => f.value === format);
+  if (found) return found.label;
+  if (format.startsWith('swiss_')) {
+    const rounds = format.replace('swiss_', '');
+    return `Swiss (${rounds} rounds)`;
+  }
+  return format;
+}
 
 export function TournamentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -10,11 +27,13 @@ export function TournamentDetail() {
   const [tournament, setTournament] = useState<Tournament | null>(null);
   const [entries, setEntries] = useState<TournamentEntry[]>([]);
   const [results, setResults] = useState<TournamentResult[]>([]);
+  const [standings, setStandings] = useState<TournamentStanding[]>([]);
   const [bots, setBots] = useState<Bot[]>([]);
   const [versions, setVersions] = useState<BotVersion[]>([]);
   const [selectedBotId, setSelectedBotId] = useState<number | ''>('');
   const [selectedVersionId, setSelectedVersionId] = useState<number | ''>('');
   const [slotName, setSlotName] = useState('');
+  const [selectedFormat, setSelectedFormat] = useState('round_robin');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -33,13 +52,19 @@ export function TournamentDetail() {
       setTournament(t);
       setEntries(e);
       setBots(b);
+      setSelectedFormat(t.format || 'round_robin');
 
-      if (t.status === 'finished') {
+      // Load standings if tournament has been run
+      if (t.status === 'finished' || t.status === 'running') {
         try {
-          const r = await api.getResults(tournamentId);
+          const [r, s] = await Promise.all([
+            api.getResults(tournamentId),
+            api.getStandings(tournamentId),
+          ]);
           setResults(r);
+          setStandings(s);
         } catch {
-          // Results may not be available yet
+          // Results/standings may not be available yet
         }
       }
     } catch (err) {
@@ -88,6 +113,17 @@ export function TournamentDetail() {
     }
   };
 
+  const handleFormatChange = async (format: string) => {
+    setSelectedFormat(format);
+    try {
+      setError(null);
+      const updated = await api.updateTournament(tournamentId, { format });
+      setTournament(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update format');
+    }
+  };
+
   const handleRun = async () => {
     try {
       setError(null);
@@ -110,18 +146,23 @@ export function TournamentDetail() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <div>
           <h2 style={{ margin: 0, color: '#e0e0e0' }}>{tournament.name}</h2>
-          <span style={{
-            padding: '2px 8px',
-            borderRadius: '10px',
-            fontSize: '12px',
-            fontWeight: 600,
-            background: tournament.status === 'finished' ? '#1a3a1a' : tournament.status === 'running' ? '#3a3a1a' : '#1a1a3a',
-            color: tournament.status === 'finished' ? '#16c79a' : tournament.status === 'running' ? '#f5a623' : '#6a6aff',
-          }}>
-            {tournament.status}
-          </span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px' }}>
+            <span style={{
+              padding: '2px 8px',
+              borderRadius: '10px',
+              fontSize: '12px',
+              fontWeight: 600,
+              background: tournament.status === 'finished' ? '#1a3a1a' : tournament.status === 'running' ? '#3a3a1a' : '#1a1a3a',
+              color: tournament.status === 'finished' ? '#16c79a' : tournament.status === 'running' ? '#f5a623' : '#6a6aff',
+            }}>
+              {tournament.status}
+            </span>
+            <span style={{ color: '#888', fontSize: '12px' }}>
+              {formatLabel(tournament.format)}
+            </span>
+          </div>
         </div>
-        {tournament.status === 'pending' && entries.length >= 2 && (
+        {(tournament.status === 'pending' || tournament.status === 'created') && entries.length >= 2 && (
           <button onClick={handleRun} style={btnRun}>
             Run Match
           </button>
@@ -131,6 +172,31 @@ export function TournamentDetail() {
       {error && (
         <div style={{ padding: '12px', background: '#5c1a1a', border: '1px solid #e94560', borderRadius: '4px', marginBottom: '16px', color: '#ff8a8a' }}>
           {error}
+        </div>
+      )}
+
+      {/* Format selector - only when tournament is editable */}
+      {(tournament.status === 'pending' || tournament.status === 'created') && (
+        <div style={{ padding: '16px', background: '#16213e', borderRadius: '8px', marginBottom: '24px' }}>
+          <h4 style={{ color: '#aaa', margin: '0 0 12px 0', fontSize: '13px', textTransform: 'uppercase' }}>
+            Tournament Format
+          </h4>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {FORMAT_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => handleFormatChange(opt.value)}
+                style={{
+                  ...btnFormat,
+                  background: selectedFormat === opt.value ? '#16c79a' : '#0a0a1a',
+                  color: selectedFormat === opt.value ? '#fff' : '#aaa',
+                  borderColor: selectedFormat === opt.value ? '#16c79a' : '#333',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -158,7 +224,7 @@ export function TournamentDetail() {
                 <td style={tdStyle}>v{entry.version || entry.bot_version_id}</td>
                 <td style={{ ...tdStyle, color: '#888' }}>{entry.slot_name || '-'}</td>
                 <td style={tdStyle}>
-                  {tournament.status === 'pending' && (
+                  {(tournament.status === 'pending' || tournament.status === 'created') && (
                     <button onClick={() => handleRemoveEntry(entry.id)} style={btnDanger}>
                       Remove
                     </button>
@@ -171,7 +237,7 @@ export function TournamentDetail() {
       )}
 
       {/* Add entry form */}
-      {tournament.status === 'pending' && (
+      {(tournament.status === 'pending' || tournament.status === 'created') && (
         <div style={{ padding: '16px', background: '#16213e', borderRadius: '8px', marginBottom: '24px' }}>
           <h4 style={{ color: '#aaa', margin: '0 0 12px 0', fontSize: '13px', textTransform: 'uppercase' }}>
             Add Entry
@@ -209,6 +275,39 @@ export function TournamentDetail() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Standings */}
+      {standings.length > 0 && (
+        <>
+          <h3 style={{ color: '#aaa', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+            Standings
+          </h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '24px' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #333' }}>
+                <th style={thStyle}>Rank</th>
+                <th style={thStyle}>Bot</th>
+                <th style={thStyle}>Score</th>
+                <th style={thStyle}>Played</th>
+                <th style={thStyle}>W</th>
+                <th style={thStyle}>L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {standings.map((s, i) => (
+                <tr key={s.bot_version_id} style={{ borderBottom: '1px solid #222' }}>
+                  <td style={tdStyle}>#{i + 1}</td>
+                  <td style={{ ...tdStyle, color: '#16c79a', fontWeight: 600 }}>{s.bot_name}</td>
+                  <td style={tdStyle}>{s.total_score}</td>
+                  <td style={tdStyle}>{s.matches_played}</td>
+                  <td style={{ ...tdStyle, color: '#4caf50' }}>{s.wins}</td>
+                  <td style={{ ...tdStyle, color: '#e94560' }}>{s.losses}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
 
       {/* Results */}
@@ -321,4 +420,13 @@ const btnLink: React.CSSProperties = {
   cursor: 'pointer',
   fontSize: '14px',
   padding: 0,
+};
+
+const btnFormat: React.CSSProperties = {
+  border: '1px solid #333',
+  padding: '6px 16px',
+  borderRadius: '4px',
+  cursor: 'pointer',
+  fontSize: '13px',
+  fontWeight: 600,
 };
