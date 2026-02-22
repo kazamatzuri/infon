@@ -13,6 +13,7 @@ services:
       - ./orig_game:/app/orig_game
       - backend-target:/app/backend/target
       - sqlite-data:/app/data
+      - ./data/maps:/app/data/maps
     environment:
       - RUST_LOG=info
       - DATABASE_URL=sqlite:///app/data/infon.db?mode=rwc

@@ -118,14 +118,14 @@ export function GameViewer() {
     setStopping(true);
     try {
       await api.stopGame();
-      // Give server a moment to clean up
-      setTimeout(() => {
-        setPhase('setup');
-        setStopping(false);
-      }, 500);
     } catch {
-      setStopping(false);
+      // Game may have already ended — that's fine
     }
+    // Always transition back to setup
+    setTimeout(() => {
+      setPhase('setup');
+      setStopping(false);
+    }, 500);
   };
 
   if (phase === 'loading') {
@@ -179,7 +179,7 @@ export function GameViewer() {
               style={inputStyle}
             >
               <option value="random">Random</option>
-              {maps.map(m => (
+              {maps.filter(m => m.name !== 'random').map(m => (
                 <option key={m.name} value={m.name}>
                   {m.name} ({m.width}x{m.height})
                 </option>

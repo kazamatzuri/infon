@@ -675,6 +675,102 @@ Migration path: keep SQLite for local/Docker mode, use PostgreSQL for the hosted
 
 ---
 
+## Cross-Cutting: Observability & Metrics (Prometheus/PromQL)
+
+**Goal**: Expose platform and game metrics via Prometheus so we can build Grafana dashboards, set up alerts, and surface player-facing stats down the road.
+
+This is not a phase — it's infrastructure that grows alongside every phase. The backend should expose a `/metrics` endpoint from day one.
+
+### Metric Categories
+
+#### Platform / Operational Metrics
+
+```
+# Gauges
+infon_active_games                          # currently running games
+infon_game_queue_depth                      # matches waiting to start
+infon_connected_websockets                  # live WebSocket connections
+infon_registered_users_total                # total user accounts
+infon_lua_vm_pool_active                    # Lua VMs currently executing
+infon_lua_vm_pool_available                 # Lua VMs idle in pool
+
+# Counters
+infon_games_started_total{format}           # by format: 1v1, ffa, 2v2, public
+infon_games_completed_total{format}
+infon_games_errored_total{format}           # games that crashed/timed out
+infon_api_requests_total{method,endpoint,status}
+infon_websocket_messages_sent_total
+infon_bot_submissions_total                 # new bot versions created
+infon_bot_validation_failures_total         # bots that failed validation
+
+# Histograms
+infon_game_duration_seconds{format}         # how long matches take
+infon_game_tick_duration_ms                 # per-tick processing time
+infon_lua_execution_duration_ms             # per-bot Lua execution time
+infon_api_request_duration_seconds{endpoint}
+infon_websocket_frame_size_bytes
+```
+
+#### Game / Gameplay Metrics
+
+```
+# Counters
+infon_creatures_spawned_total{creature_type}     # bug, plant, koth_marker
+infon_creatures_killed_total{creature_type}
+infon_food_consumed_total
+infon_koth_captures_total                        # king-of-the-hill flips
+
+# Histograms
+infon_match_score{format}                        # score distribution
+infon_creatures_per_game{format}                 # total creatures spawned per match
+infon_elo_change_per_match{format}               # magnitude of Elo swings
+```
+
+#### Player-Facing Stats (derived via PromQL)
+
+These queries power dashboards and eventually in-app stats pages:
+
+```promql
+# Games run today
+increase(infon_games_completed_total[24h])
+
+# Total kills across the platform (all time)
+infon_creatures_killed_total
+
+# Average game duration by format
+histogram_quantile(0.5, rate(infon_game_duration_seconds_bucket[7d]))
+
+# Most active format this week
+topk(1, increase(infon_games_completed_total[7d]))
+
+# Kill rate per minute across all games
+rate(infon_creatures_killed_total[5m]) * 60
+
+# Platform health: games erroring vs completing
+rate(infon_games_errored_total[1h]) / rate(infon_games_completed_total[1h])
+
+# Lua execution hot spots (P99 bot think time)
+histogram_quantile(0.99, rate(infon_lua_execution_duration_ms_bucket[5m]))
+```
+
+### Implementation Notes
+
+- Use the `prometheus` crate (or `metrics` + `metrics-exporter-prometheus`) in the Rust backend
+- Expose `/metrics` endpoint alongside the API (separate port or path-based routing)
+- Docker Compose gets a `prometheus` + `grafana` service for local dev
+- Production: standard Prometheus scrape config, Grafana dashboards as code (JSON provisioning)
+- **Labels matter**: use `format` (1v1/ffa/2v2/public), `creature_type`, `endpoint` labels consistently
+- Keep cardinality low — do NOT use `user_id` or `bot_id` as Prometheus labels (use application-level queries for per-user stats)
+
+### Grafana Dashboard Ideas
+
+1. **Platform Overview** — active games, queue depth, WebSocket connections, API request rate
+2. **Game Stats** — games/day, kills/day, average duration, format popularity
+3. **Engine Health** — tick duration percentiles, Lua execution time, error rates
+4. **Growth** — new users/day, new bots/day, matches/day trend
+
+---
+
 ## Open Questions
 
 1. **Map editor?** — Should users be able to create custom maps for private matches?

@@ -293,8 +293,95 @@ impl Game {
         // 3. King of the Hill scoring
         self.process_koth();
 
-        // 4. Advance game time
+        // 4. Food spawning
+        self.process_food_spawners();
+
+        // 5. Advance game time
         self.game_time += delta as i64;
+    }
+
+    /// Spawn food from map food spawners. Each spawner places food at a random tile
+    /// within its radius every `interval` ticks.
+    fn process_food_spawners(&mut self) {
+        use rand::Rng;
+        let mut world = self.world.borrow_mut();
+        let game_time = self.game_time;
+        let spawners = world.food_spawners.clone();
+
+        for spawner in &spawners {
+            // interval is in milliseconds (matching original Lua game_time units)
+            let interval_ms = spawner.interval as i64;
+            if interval_ms <= 0 {
+                continue;
+            }
+            // Only spawn on the tick boundary matching this interval
+            if game_time % interval_ms != 0 {
+                continue;
+            }
+            // Place food at a random tile: offset by 0..radius (positive only, like original)
+            let mut rng = rand::thread_rng();
+            let r = spawner.radius.max(1) as i32;
+            let tx = spawner.x as i32 + rng.gen_range(0..=r);
+            let ty = spawner.y as i32 + rng.gen_range(0..=r);
+            if tx >= 0 && ty >= 0 {
+                let tx = tx as usize;
+                let ty = ty as usize;
+                if world.is_walkable(tx, ty) {
+                    world.add_food(tx, ty, spawner.amount);
+                }
+            }
+        }
+    }
+
+    /// Ensure the map has enough food spawners. If fewer than 10, add random ones on
+    /// walkable tiles (like the original game's world_find_digged() spawners).
+    pub fn ensure_food_spawners(&mut self) {
+        use super::world::FoodSpawner;
+        use rand::Rng;
+
+        let mut world = self.world.borrow_mut();
+        let existing = world.food_spawners.len();
+        let target = 15;
+        if existing >= target {
+            return;
+        }
+
+        let mut rng = rand::thread_rng();
+        let walkable: Vec<(usize, usize)> = (0..world.width)
+            .flat_map(|x| (0..world.height).map(move |y| (x, y)))
+            .filter(|&(x, y)| world.is_walkable(x, y))
+            .collect();
+
+        if walkable.is_empty() {
+            return;
+        }
+
+        let to_add = (target - existing).min(walkable.len());
+        for _ in 0..to_add {
+            let idx = rng.gen_range(0..walkable.len());
+            let (x, y) = walkable[idx];
+            world.food_spawners.push(FoodSpawner {
+                x,
+                y,
+                radius: rng.gen_range(2..=5),
+                amount: 500,
+                interval: 2000,
+            });
+        }
+    }
+
+    /// Place initial food from spawners so maps start with food already on them.
+    /// Mirrors the original game behavior: each spawner gets a big initial food dump.
+    pub fn seed_initial_food(&mut self) {
+        let mut world = self.world.borrow_mut();
+
+        for spawner in &world.food_spawners.clone() {
+            // Place a large initial food pile at the spawner's center tile
+            // (original game does world_add_food(spawner.x, spawner.y, 10000))
+            if world.is_walkable(spawner.x, spawner.y) {
+                world.add_food(spawner.x, spawner.y, 9000);
+            }
+        }
     }
 
     /// Run each player's Lua think function.

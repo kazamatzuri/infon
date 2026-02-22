@@ -173,6 +173,12 @@ impl GameServer {
                     }
                 }
 
+                // Auto-generate food spawners if the map has none
+                game.ensure_food_spawners();
+
+                // Place initial food from spawners
+                game.seed_initial_food();
+
                 // Spawn initial creatures for each player on random walkable tiles
                 for &pid in &player_ids {
                     let initial_creatures = 2;

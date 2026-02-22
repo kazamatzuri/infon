@@ -276,8 +276,8 @@ impl World {
                     x: fx,
                     y: fy,
                     radius,
-                    amount: food_per_spot,
-                    interval: 50,
+                    amount: food_per_spot / 20,
+                    interval: 5000,
                 });
             }
         }

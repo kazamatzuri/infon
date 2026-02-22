@@ -89,7 +89,7 @@ fn internal_error(e: sqlx::Error) -> impl IntoResponse {
 // ── Router ────────────────────────────────────────────────────────────
 
 pub fn router(db: Arc<Database>, game_server: Arc<GameServer>) -> Router {
-    let maps_dir = PathBuf::from("data/maps");
+    let maps_dir = PathBuf::from("../data/maps");
     let state = AppState {
         db,
         game_server,
