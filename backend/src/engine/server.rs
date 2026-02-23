@@ -108,13 +108,18 @@ pub enum GameMessage {
         winner: Option<u32>,
         final_scores: Vec<PlayerSnapshot>,
     },
+    /// A player failed to load (e.g. Lua syntax error).
+    #[serde(rename = "player_load_error")]
+    PlayerLoadError {
+        player_name: String,
+        error: String,
+    },
 }
 
-/// A player entry for starting a game: (name, code, api_type).
+/// A player entry for starting a game.
 pub struct PlayerEntry {
     pub name: String,
     pub code: String,
-    pub api_type: String,
 }
 
 /// Manages a single game instance, running the game loop on a dedicated thread
@@ -204,12 +209,19 @@ impl GameServer {
                 // Add players and spawn initial creatures
                 let mut player_ids = Vec::new();
                 for entry in &players {
-                    match game.add_player(&entry.name, &entry.code, &entry.api_type) {
+                    match game.add_player(&entry.name, &entry.code) {
                         Ok(pid) => {
                             player_ids.push(pid);
                         }
                         Err(e) => {
                             tracing::error!("Failed to add player '{}': {}", entry.name, e);
+                            let err_msg = GameMessage::PlayerLoadError {
+                                player_name: entry.name.clone(),
+                                error: e.to_string(),
+                            };
+                            if let Ok(json) = serde_json::to_string(&err_msg) {
+                                let _ = tx.send(json);
+                            }
                         }
                     }
                 }

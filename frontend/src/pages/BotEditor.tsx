@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
+import type { editor as monacoEditor } from 'monaco-editor';
 import { api } from '../api/client';
 import type { Bot, BotVersion } from '../api/client';
 
@@ -32,12 +33,51 @@ export function BotEditor() {
   const [versions, setVersions] = useState<BotVersion[]>([]);
   const [currentVersion, setCurrentVersion] = useState<BotVersion | null>(null);
   const [code, setCode] = useState(DEFAULT_CODE);
-  const [apiType, setApiType] = useState('oo');
   const [botName, setBotName] = useState('');
   const [botDescription, setBotDescription] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
+  const validateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const validateLuaCode = useCallback(async (codeToValidate: string) => {
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    if (!monaco || !editor) return;
+    const model = editor.getModel();
+    if (!model) return;
+
+    try {
+      const result = await api.validateLua(codeToValidate);
+      if (!result.valid && result.error) {
+        // Parse line number from error like: [string "user_bot"]:5: <unexpected symbol near 'x'>
+        const match = result.error.match(/\[string "[^"]+"\]:(\d+): (.+)$/);
+        const line = match ? parseInt(match[1], 10) : 1;
+        const message = match ? match[2] : result.error;
+        monaco.editor.setModelMarkers(model, 'lua', [{
+          severity: monaco.MarkerSeverity.Error,
+          message,
+          startLineNumber: line,
+          startColumn: 1,
+          endLineNumber: line,
+          endColumn: model.getLineLength(line) + 1,
+        }]);
+      } else {
+        monaco.editor.setModelMarkers(model, 'lua', []);
+      }
+    } catch {
+      // Network error — clear markers rather than showing stale errors
+      monaco.editor.setModelMarkers(model, 'lua', []);
+    }
+  }, []);
+
+  const scheduleValidation = useCallback((codeToValidate: string) => {
+    if (validateTimerRef.current) clearTimeout(validateTimerRef.current);
+    validateTimerRef.current = setTimeout(() => validateLuaCode(codeToValidate), 600);
+  }, [validateLuaCode]);
 
   const loadBot = useCallback(async (id: number) => {
     try {
@@ -55,10 +95,9 @@ export function BotEditor() {
         const latest = versionsData[versionsData.length - 1];
         setCurrentVersion(latest);
         setCode(latest.code);
-        setApiType(latest.api_type || 'oo');
+        scheduleValidation(latest.code);
       } else {
         setCode(DEFAULT_CODE);
-        setApiType('oo');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bot');
@@ -70,6 +109,13 @@ export function BotEditor() {
       loadBot(parseInt(botId, 10));
     }
   }, [botId, loadBot]);
+
+  // Cleanup validation timer on unmount
+  useEffect(() => {
+    return () => {
+      if (validateTimerRef.current) clearTimeout(validateTimerRef.current);
+    };
+  }, []);
 
   const handleSaveVersion = async () => {
     if (!bot) return;
@@ -83,7 +129,7 @@ export function BotEditor() {
         setBot({ ...bot, name: botName, description: botDescription });
       }
 
-      const newVersion = await api.createVersion(bot.id, code, apiType);
+      const newVersion = await api.createVersion(bot.id, code);
       setVersions(prev => [...prev, newVersion]);
       setCurrentVersion(newVersion);
       setSuccessMsg(`Saved as version ${newVersion.version}`);
@@ -101,7 +147,7 @@ export function BotEditor() {
       const ver = await api.getVersion(bot.id, versionId);
       setCurrentVersion(ver);
       setCode(ver.code);
-      setApiType(ver.api_type || 'oo');
+      scheduleValidation(ver.code);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load version');
     }
@@ -134,14 +180,6 @@ export function BotEditor() {
           placeholder="Description"
           style={{ ...inputStyle, width: '250px' }}
         />
-        <select
-          value={apiType}
-          onChange={e => setApiType(e.target.value)}
-          style={selectStyle}
-        >
-          <option value="oo">API: oo</option>
-          <option value="state">API: state</option>
-        </select>
         <select
           value={currentVersion?.id || ''}
           onChange={e => handleVersionChange(parseInt(e.target.value, 10))}
@@ -182,7 +220,15 @@ export function BotEditor() {
           defaultLanguage="lua"
           theme="vs-dark"
           value={code}
-          onChange={value => setCode(value || '')}
+          onChange={value => {
+            const newCode = value || '';
+            setCode(newCode);
+            scheduleValidation(newCode);
+          }}
+          onMount={(editor, monaco) => {
+            editorRef.current = editor;
+            monacoRef.current = monaco;
+          }}
           options={{
             fontSize: 14,
             minimap: { enabled: false },

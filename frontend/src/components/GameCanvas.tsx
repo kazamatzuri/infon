@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import type { WorldMsg, SnapshotMsg, GameEndMsg, PlayerSnapshot } from '../api/client';
+import type { WorldMsg, SnapshotMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg } from '../api/client';
 import {
   getTileSpriteForGfx, isSnowGfx,
   FOOD_SPRITES, SNOW_FOOD_SPRITES,
@@ -62,6 +62,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
   const [gameTime, setGameTime] = useState(0);
   const [connected, setConnected] = useState(false);
   const animFrameRef = useRef<number>(0);
+  const [playerLoadErrors, setPlayerLoadErrors] = useState<PlayerLoadErrorMsg[]>([]);
   const [sidebarTab, setSidebarTab] = useState<'scores' | 'console'>('scores');
   const consoleLogRef = useRef<Map<number, string[]>>(new Map());
   const [consoleLogs, setConsoleLogs] = useState<Map<number, string[]>>(new Map());
@@ -285,6 +286,9 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
               if (hasNew) setConsoleLogs(new Map(consoleLogRef.current));
             }
             break;
+          case 'player_load_error':
+            setPlayerLoadErrors(prev => [...prev, msg]);
+            break;
           case 'game_end':
             setGameEnd(msg);
             break;
@@ -384,35 +388,63 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
                 </div>
               </div>
 
-              <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-                Players
-              </div>
-              {players.length === 0 ? (
-                <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
-              ) : (
-                players
-                  .sort((a, b) => b.score - a.score)
-                  .map(p => (
-                    <div key={p.id} style={{
+              {playerLoadErrors.length > 0 && (
+                <>
+                  <div style={{ color: '#e94560', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
+                    Load Errors
+                  </div>
+                  {playerLoadErrors.map((err, i) => (
+                    <div key={i} style={{
                       padding: '8px',
                       marginBottom: '8px',
-                      background: '#0a0a1a',
+                      background: '#2a0a0a',
                       borderRadius: '6px',
-                      borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
+                      borderLeft: '3px solid #e94560',
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{
-                          display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
-                          background: PLAYER_COLORS[p.id % PLAYER_COLORS.length],
-                        }} />
-                        <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+                      <div style={{ color: '#ff8a8a', fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>
+                        {err.player_name}
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                        <span style={{ color: '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
-                        <span style={{ color: '#888', fontSize: '13px' }}>{p.num_creatures} units</span>
+                      <div style={{ color: '#cc6666', fontSize: '12px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                        {err.error}
                       </div>
                     </div>
-                  ))
+                  ))}
+                </>
+              )}
+
+              {players.length === 0 && playerLoadErrors.length === 0 ? (
+                <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
+              ) : (
+                <>
+                  {players.length > 0 && (
+                    <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
+                      Players
+                    </div>
+                  )}
+                  {players
+                    .sort((a, b) => b.score - a.score)
+                    .map(p => (
+                      <div key={p.id} style={{
+                        padding: '8px',
+                        marginBottom: '8px',
+                        background: '#0a0a1a',
+                        borderRadius: '6px',
+                        borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{
+                            display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
+                            background: PLAYER_COLORS[p.id % PLAYER_COLORS.length],
+                          }} />
+                          <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                          <span style={{ color: '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
+                          <span style={{ color: '#888', fontSize: '13px' }}>{p.num_creatures} units</span>
+                        </div>
+                      </div>
+                    ))}
+                </>
               )}
             </>
           ) : (

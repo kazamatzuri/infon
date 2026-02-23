@@ -11,16 +11,15 @@ pub struct Player {
     pub color: u8,
     pub num_creatures: i32,
     pub lua: Lua,
-    pub api_type: String,
     pub output: Vec<String>,
 }
 
 impl Player {
     /// Create a new player with a fresh Lua VM.
-    /// Registers all API functions and constants, loads the high-level API (oo or state).
+    /// Registers all API functions and constants, loads the OO API.
     /// Bot code is NOT loaded here — call `load_code()` after setting game state
     /// so that top-level bot code can call API functions like `world_size()`.
-    pub fn new(id: u32, name: &str, api_type: &str) -> Result<Self, String> {
+    pub fn new(id: u32, name: &str) -> Result<Self, String> {
         // SAFETY: We need the debug library for debug.sethook to set instruction
         // limits on coroutine threads. The debug global is removed in the bootstrap
         // after saving a reference to debug.sethook, so user code cannot access it.
@@ -60,12 +59,9 @@ creature_config = setmetatable({{}}, {{
     end
 }})
 
--- needs_api function (validates API type)
-do
-    local _api_type = "{api_type}"
-    function needs_api(needed)
-        assert(needed == _api_type, "This Code needs the API '" .. needed .. "' but '" .. _api_type .. "' is loaded")
-    end
+-- needs_api function (only "oo" is supported)
+function needs_api(needed)
+    assert(needed == "oo", "The '" .. needed .. "' API is not supported. Only the 'oo' API is available.")
 end
 
 -- Switch print to client_print
@@ -137,29 +133,19 @@ collectgarbage = nil
             .exec()
             .map_err(|e| format!("Failed to load bootstrap: {e}"))?;
 
-        // Load the high-level API
-        let api_code = match api_type {
-            "oo" => include_str!("../../../orig_game/api/oo.lua"),
-            "state" => include_str!("../../../orig_game/api/state.lua"),
-            _ => return Err(format!("Unknown API type: {api_type}")),
-        };
+        // Load the OO high-level API
+        let api_code = include_str!("../../../orig_game/api/oo.lua");
         lua.load(api_code)
-            .set_name(&format!("api/{api_type}.lua"))
+            .set_name("api/oo.lua")
             .exec()
-            .map_err(|e| format!("Failed to load {api_type} API: {e}"))?;
+            .map_err(|e| format!("Failed to load OO API: {e}"))?;
 
-        // Load the default code for the API
-        let default_code = match api_type {
-            "oo" => include_str!("../../../orig_game/api/oo-default.lua"),
-            "state" => include_str!("../../../orig_game/api/state-default.lua"),
-            _ => "",
-        };
-        if !default_code.is_empty() {
-            lua.load(default_code)
-                .set_name(&format!("api/{api_type}-default.lua"))
-                .exec()
-                .map_err(|e| format!("Failed to load {api_type} defaults: {e}"))?;
-        }
+        // Load the OO default code
+        let default_code = include_str!("../../../orig_game/api/oo-default.lua");
+        lua.load(default_code)
+            .set_name("api/oo-default.lua")
+            .exec()
+            .map_err(|e| format!("Failed to load OO defaults: {e}"))?;
 
         Ok(Player {
             id,
@@ -168,7 +154,6 @@ collectgarbage = nil
             color: (id % 16) as u8,
             num_creatures: 0,
             lua,
-            api_type: api_type.to_string(),
             output: Vec::new(),
         })
     }
@@ -194,26 +179,17 @@ mod tests {
 
     #[test]
     fn test_create_player() {
-        let player = Player::new(1, "TestBot", "oo");
+        let player = Player::new(1, "TestBot");
         assert!(player.is_ok());
         let player = player.unwrap();
         assert_eq!(player.id, 1);
         assert_eq!(player.name, "TestBot");
         assert_eq!(player.score, 0);
-        assert_eq!(player.api_type, "oo");
-    }
-
-    #[test]
-    fn test_create_player_state_api() {
-        let player = Player::new(2, "StateBot", "state");
-        assert!(player.is_ok());
-        let player = player.unwrap();
-        assert_eq!(player.api_type, "state");
     }
 
     #[test]
     fn test_player_lua_constants() {
-        let player = Player::new(1, "TestBot", "oo").unwrap();
+        let player = Player::new(1, "TestBot").unwrap();
         let lua = &player.lua;
 
         // Check creature type constants
@@ -254,14 +230,8 @@ mod tests {
     }
 
     #[test]
-    fn test_create_player_invalid_api() {
-        let result = Player::new(1, "Bad", "invalid");
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_player_think_exists() {
-        let player = Player::new(1, "TestBot", "oo").unwrap();
+        let player = Player::new(1, "TestBot").unwrap();
         let lua = &player.lua;
         let _func: mlua::Function = lua.globals().get("player_think").unwrap();
         // If we got here without error, the function exists and is a Function type

@@ -36,7 +36,7 @@ fn test_stupibot_loads() {
     let mut game = Game::new(world);
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
-    let result = game.add_player("stupibot", code, "oo");
+    let result = game.add_player("stupibot", code);
     assert!(result.is_ok(), "Failed to add stupibot: {:?}", result.err());
 }
 
@@ -47,7 +47,7 @@ fn test_stupibot_runs_50_ticks() {
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
     let player_id = game
-        .add_player("stupibot", code, "oo")
+        .add_player("stupibot", code)
         .expect("Failed to add stupibot");
 
     // Spawn a creature on a food tile
@@ -76,7 +76,7 @@ fn test_stupibot_eats_food() {
     let mut game = Game::new(world);
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
-    let player_id = game.add_player("stupibot", code, "oo").unwrap();
+    let player_id = game.add_player("stupibot", code).unwrap();
 
     let spawn_x = World::tile_center(5);
     let spawn_y = World::tile_center(5);
@@ -107,7 +107,7 @@ fn test_stupibot2_loads_and_runs() {
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot2.lua");
     let player_id = game
-        .add_player("stupibot2", code, "oo")
+        .add_player("stupibot2", code)
         .expect("Failed to add stupibot2");
 
     let spawn_x = World::tile_center(5);
@@ -127,7 +127,7 @@ fn test_sissy_bot_loads_and_runs() {
 
     let code = include_str!("../../orig_game/contrib/bots/sissy-bot.lua");
     let player_id = game
-        .add_player("sissy-bot", code, "oo")
+        .add_player("sissy-bot", code)
         .expect("Failed to add sissy-bot");
 
     let spawn_x = World::tile_center(5);
@@ -141,49 +141,6 @@ fn test_sissy_bot_loads_and_runs() {
     }
 }
 
-// ---- State API bot ----
-
-#[test]
-fn test_easybot_loads() {
-    let world = create_test_world();
-    let mut game = Game::new(world);
-
-    let code = include_str!("../../orig_game/contrib/bots/easybot.lua");
-    let result = game.add_player("easybot", code, "state");
-    assert!(result.is_ok(), "Failed to add easybot: {:?}", result.err());
-}
-
-#[test]
-fn test_easybot_runs_100_ticks() {
-    let world = create_test_world();
-    let mut game = Game::new(world);
-
-    let code = include_str!("../../orig_game/contrib/bots/easybot.lua");
-    let player_id = game
-        .add_player("easybot", code, "state")
-        .expect("Failed to add easybot");
-
-    let spawn_x = World::tile_center(5);
-    let spawn_y = World::tile_center(5);
-    let creature_id = game
-        .spawn_creature(player_id, spawn_x, spawn_y, CREATURE_SMALL)
-        .expect("Failed to spawn creature");
-
-    for _ in 0..100 {
-        game.tick();
-    }
-
-    let creatures = game.creatures.borrow();
-    if let Some(creature) = creatures.get(&creature_id) {
-        // easybot should have eaten food since it's on a food tile
-        assert!(
-            creature.food > 0,
-            "easybot should have eaten food, but food is {}",
-            creature.food
-        );
-    }
-}
-
 // ---- Multi-player test ----
 
 #[test]
@@ -192,8 +149,8 @@ fn test_stupibot_vs_stupibot() {
     let mut game = Game::new(world);
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
-    let p1 = game.add_player("stupibot1", code, "oo").unwrap();
-    let p2 = game.add_player("stupibot2_player", code, "oo").unwrap();
+    let p1 = game.add_player("stupibot1", code).unwrap();
+    let p2 = game.add_player("stupibot2_player", code).unwrap();
 
     // Spawn creatures for both players
     game.spawn_creature(
@@ -218,37 +175,6 @@ fn test_stupibot_vs_stupibot() {
     assert!(game.game_time >= 20000);
 }
 
-#[test]
-fn test_oo_vs_state_bots() {
-    let world = create_test_world();
-    let mut game = Game::new(world);
-
-    let oo_code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
-    let state_code = include_str!("../../orig_game/contrib/bots/easybot.lua");
-
-    let p1 = game.add_player("stupibot", oo_code, "oo").unwrap();
-    let p2 = game.add_player("easybot", state_code, "state").unwrap();
-
-    game.spawn_creature(
-        p1,
-        World::tile_center(5),
-        World::tile_center(5),
-        CREATURE_SMALL,
-    );
-    game.spawn_creature(
-        p2,
-        World::tile_center(15),
-        World::tile_center(15),
-        CREATURE_SMALL,
-    );
-
-    for _ in 0..100 {
-        game.tick();
-    }
-
-    assert!(game.game_time >= 10000);
-}
-
 // ---- No-error check: verify player output doesn't contain critical Lua errors ----
 
 #[test]
@@ -257,7 +183,7 @@ fn test_stupibot_no_lua_errors() {
     let mut game = Game::new(world);
 
     let code = include_str!("../../orig_game/contrib/bots/stupibot.lua");
-    let player_id = game.add_player("stupibot", code, "oo").unwrap();
+    let player_id = game.add_player("stupibot", code).unwrap();
 
     game.spawn_creature(
         player_id,
@@ -279,38 +205,6 @@ fn test_stupibot_no_lua_errors() {
     assert!(
         errors.is_empty(),
         "stupibot produced Lua errors: {:?}",
-        errors
-    );
-}
-
-#[test]
-fn test_easybot_no_lua_errors() {
-    let world = create_test_world();
-    let mut game = Game::new(world);
-
-    let code = include_str!("../../orig_game/contrib/bots/easybot.lua");
-    let player_id = game.add_player("easybot", code, "state").unwrap();
-
-    game.spawn_creature(
-        player_id,
-        World::tile_center(5),
-        World::tile_center(5),
-        CREATURE_SMALL,
-    );
-
-    for _ in 0..30 {
-        game.tick();
-    }
-
-    let player = game.players.get(&player_id).unwrap();
-    let errors: Vec<&String> = player
-        .output
-        .iter()
-        .filter(|s| s.starts_with("Lua error"))
-        .collect();
-    assert!(
-        errors.is_empty(),
-        "easybot produced Lua errors: {:?}",
         errors
     );
 }

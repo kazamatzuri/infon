@@ -732,7 +732,6 @@ impl Database {
         &self,
         bot_id: i64,
         code: &str,
-        api_type: &str,
     ) -> Result<BotVersion, sqlx::Error> {
         // Determine next version number for this bot
         let max_version: Option<i32> =
@@ -759,12 +758,11 @@ impl Database {
         };
 
         let row = sqlx::query_as::<_, BotVersion>(
-            "INSERT INTO bot_versions (bot_id, version, code, api_type, elo_rating, elo_1v1, elo_peak) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
+            "INSERT INTO bot_versions (bot_id, version, code, elo_rating, elo_1v1, elo_peak) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
         )
         .bind(bot_id)
         .bind(next_version)
         .bind(code)
-        .bind(api_type)
         .bind(starting_elo)
         .bind(starting_elo)
         .bind(starting_elo)
@@ -1761,15 +1759,15 @@ mod tests {
         let bot = db.create_bot("VersionBot", "", None).await.unwrap();
 
         let v1 = db
-            .create_bot_version(bot.id, "print('v1')", "oo")
+            .create_bot_version(bot.id, "print('v1')")
             .await
             .unwrap();
         assert_eq!(v1.version, 1);
         assert_eq!(v1.code, "print('v1')");
-        assert_eq!(v1.api_type, "oo");
+
 
         let v2 = db
-            .create_bot_version(bot.id, "print('v2')", "state")
+            .create_bot_version(bot.id, "print('v2')")
             .await
             .unwrap();
         assert_eq!(v2.version, 2);
@@ -1811,7 +1809,7 @@ mod tests {
         let db = test_db().await;
 
         let bot = db.create_bot("EntryBot", "", None).await.unwrap();
-        let v = db.create_bot_version(bot.id, "code", "oo").await.unwrap();
+        let v = db.create_bot_version(bot.id, "code").await.unwrap();
         let t = db.create_tournament("T", "default").await.unwrap();
 
         let entry = db
@@ -1836,7 +1834,7 @@ mod tests {
         let db = test_db().await;
 
         let bot = db.create_bot("EloBot", "", None).await.unwrap();
-        let v = db.create_bot_version(bot.id, "code", "oo").await.unwrap();
+        let v = db.create_bot_version(bot.id, "code").await.unwrap();
 
         assert_eq!(v.elo_rating, 1500);
         assert_eq!(v.games_played, 0);
@@ -1865,7 +1863,7 @@ mod tests {
         let bot = db.create_bot("ActiveBot", "", None).await.unwrap();
         assert!(bot.active_version_id.is_none());
 
-        let v1 = db.create_bot_version(bot.id, "v1", "oo").await.unwrap();
+        let v1 = db.create_bot_version(bot.id, "v1").await.unwrap();
         db.set_active_version(bot.id, v1.id).await.unwrap();
 
         let bot = db.get_bot(bot.id).await.unwrap().unwrap();
@@ -1881,7 +1879,7 @@ mod tests {
         let db = test_db().await;
 
         let bot = db.create_bot("ArchiveBot", "", None).await.unwrap();
-        let v = db.create_bot_version(bot.id, "code", "oo").await.unwrap();
+        let v = db.create_bot_version(bot.id, "code").await.unwrap();
         assert!(!v.is_archived);
 
         db.archive_version(v.id, true).await.unwrap();
@@ -1898,8 +1896,8 @@ mod tests {
         let db = test_db().await;
 
         let bot = db.create_bot("MatchBot", "", None).await.unwrap();
-        let v1 = db.create_bot_version(bot.id, "code1", "oo").await.unwrap();
-        let v2 = db.create_bot_version(bot.id, "code2", "oo").await.unwrap();
+        let v1 = db.create_bot_version(bot.id, "code1").await.unwrap();
+        let v2 = db.create_bot_version(bot.id, "code2").await.unwrap();
 
         let m = db.create_match("1v1", "random").await.unwrap();
         assert_eq!(m.format, "1v1");
@@ -1978,11 +1976,11 @@ mod tests {
         let bot_a = db.create_bot("BotA", "", Some(user.id)).await.unwrap();
         let bot_b = db.create_bot("BotB", "", Some(user.id)).await.unwrap();
         let va = db
-            .create_bot_version(bot_a.id, "code_a", "oo")
+            .create_bot_version(bot_a.id, "code_a")
             .await
             .unwrap();
         let vb = db
-            .create_bot_version(bot_b.id, "code_b", "oo")
+            .create_bot_version(bot_b.id, "code_b")
             .await
             .unwrap();
 
@@ -2039,8 +2037,8 @@ mod tests {
         let team = db.create_team(user.id, "VersionTeam").await.unwrap();
 
         let bot = db.create_bot("TVBot", "", Some(user.id)).await.unwrap();
-        let v1 = db.create_bot_version(bot.id, "code1", "oo").await.unwrap();
-        let v2 = db.create_bot_version(bot.id, "code2", "oo").await.unwrap();
+        let v1 = db.create_bot_version(bot.id, "code1").await.unwrap();
+        let v2 = db.create_bot_version(bot.id, "code2").await.unwrap();
 
         let tv1 = db.create_team_version(team.id, v1.id, v2.id).await.unwrap();
         assert_eq!(tv1.version, 1);
@@ -2094,7 +2092,7 @@ mod tests {
         // Create two bots with different elo ratings
         let bot_a = db.create_bot("BotHigh", "", Some(user.id)).await.unwrap();
         let va = db
-            .create_bot_version(bot_a.id, "code_a", "oo")
+            .create_bot_version(bot_a.id, "code_a")
             .await
             .unwrap();
         db.update_version_elo(va.id, 1600).await.unwrap();
@@ -2104,7 +2102,7 @@ mod tests {
 
         let bot_b = db.create_bot("BotLow", "", Some(user.id)).await.unwrap();
         let vb = db
-            .create_bot_version(bot_b.id, "code_b", "oo")
+            .create_bot_version(bot_b.id, "code_b")
             .await
             .unwrap();
         db.update_version_elo(vb.id, 1520).await.unwrap();
@@ -2135,7 +2133,7 @@ mod tests {
         // Bot with games played (should appear)
         let bot_active = db.create_bot("ActiveBot", "", Some(user.id)).await.unwrap();
         let v_active = db
-            .create_bot_version(bot_active.id, "code", "oo")
+            .create_bot_version(bot_active.id, "code")
             .await
             .unwrap();
         db.update_version_elo(v_active.id, 1550).await.unwrap();
@@ -2149,7 +2147,7 @@ mod tests {
             .await
             .unwrap();
         let v_archived = db
-            .create_bot_version(bot_archived.id, "code", "oo")
+            .create_bot_version(bot_archived.id, "code")
             .await
             .unwrap();
         db.update_version_elo(v_archived.id, 1700).await.unwrap();
@@ -2161,7 +2159,7 @@ mod tests {
         // Bot with zero games (should NOT appear)
         let bot_zero = db.create_bot("ZeroBot", "", Some(user.id)).await.unwrap();
         let _v_zero = db
-            .create_bot_version(bot_zero.id, "code", "oo")
+            .create_bot_version(bot_zero.id, "code")
             .await
             .unwrap();
 
@@ -2286,12 +2284,12 @@ mod tests {
         // Create bots and versions
         let bot_a = db.create_bot("StandingsA", "", None).await.unwrap();
         let va = db
-            .create_bot_version(bot_a.id, "code_a", "oo")
+            .create_bot_version(bot_a.id, "code_a")
             .await
             .unwrap();
         let bot_b = db.create_bot("StandingsB", "", None).await.unwrap();
         let vb = db
-            .create_bot_version(bot_b.id, "code_b", "oo")
+            .create_bot_version(bot_b.id, "code_b")
             .await
             .unwrap();
 
@@ -2331,7 +2329,7 @@ mod tests {
 
         // First version should have default 1500 Elo
         let v1 = db
-            .create_bot_version(bot.id, "print('v1')", "oo")
+            .create_bot_version(bot.id, "print('v1')")
             .await
             .unwrap();
         assert_eq!(v1.elo_rating, 1500);
@@ -2342,7 +2340,7 @@ mod tests {
 
         // Second version should have soft reset: (1700 + 1500) / 2 = 1600
         let v2 = db
-            .create_bot_version(bot.id, "print('v2')", "oo")
+            .create_bot_version(bot.id, "print('v2')")
             .await
             .unwrap();
         assert_eq!(v2.version, 2);
@@ -2355,7 +2353,7 @@ mod tests {
 
         // Third version: (1400 + 1500) / 2 = 1450
         let v3 = db
-            .create_bot_version(bot.id, "print('v3')", "oo")
+            .create_bot_version(bot.id, "print('v3')")
             .await
             .unwrap();
         assert_eq!(v3.version, 3);
@@ -2363,7 +2361,7 @@ mod tests {
 
         // Default case: new bot, first version = 1500
         let bot2 = db.create_bot("FreshBot", "", None).await.unwrap();
-        let fresh_v1 = db.create_bot_version(bot2.id, "code", "oo").await.unwrap();
+        let fresh_v1 = db.create_bot_version(bot2.id, "code").await.unwrap();
         assert_eq!(fresh_v1.elo_rating, 1500);
     }
 

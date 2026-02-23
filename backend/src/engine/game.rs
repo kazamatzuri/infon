@@ -119,13 +119,13 @@ impl Game {
         }
     }
 
-    /// Add a player with the given bot code and API type ("oo" or "state").
+    /// Add a player with the given bot code.
     /// Returns the player ID on success.
-    pub fn add_player(&mut self, name: &str, code: &str, api_type: &str) -> Result<u32, String> {
+    pub fn add_player(&mut self, name: &str, code: &str) -> Result<u32, String> {
         let player_id = self.next_player_id;
         self.next_player_id += 1;
 
-        let player = Player::new(player_id, name, api_type)?;
+        let player = Player::new(player_id, name)?;
 
         // Set game state so top-level bot code can call API functions
         // (e.g. world_size(), get_koth_pos() during script initialization)
@@ -944,7 +944,7 @@ mod tests {
         let world = make_test_world();
         let mut game = Game::new(world);
 
-        let pid = game.add_player("TestBot", "", "oo");
+        let pid = game.add_player("TestBot", "");
         assert!(pid.is_ok());
         let pid = pid.unwrap();
         assert_eq!(pid, 1);
@@ -956,7 +956,7 @@ mod tests {
     fn test_spawn_creature() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid = game.add_player("TestBot", "", "oo").unwrap();
+        let pid = game.add_player("TestBot", "").unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -976,7 +976,7 @@ mod tests {
     fn test_basic_tick() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid = game.add_player("TestBot", "", "oo").unwrap();
+        let pid = game.add_player("TestBot", "").unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1004,7 +1004,7 @@ mod tests {
                 self:wait_for_next_round()
             end
         "#;
-        let pid = game.add_player("EatBot", code, "oo").unwrap();
+        let pid = game.add_player("EatBot", code).unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1044,7 +1044,7 @@ mod tests {
             end
             "#
         );
-        let pid = game.add_player("WalkBot", &code, "oo").unwrap();
+        let pid = game.add_player("WalkBot", &code).unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1072,9 +1072,9 @@ mod tests {
         let mut game = Game::new(world);
 
         // Player 1: big creature that attacks
-        let pid1 = game.add_player("Attacker", "", "oo").unwrap();
+        let pid1 = game.add_player("Attacker", "").unwrap();
         // Player 2: small creature as target
-        let pid2 = game.add_player("Target", "", "oo").unwrap();
+        let pid2 = game.add_player("Target", "").unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1111,7 +1111,7 @@ mod tests {
     fn test_koth() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid = game.add_player("KothBot", "", "oo").unwrap();
+        let pid = game.add_player("KothBot", "").unwrap();
 
         // Spawn creature on the koth tile
         let koth_x = World::tile_center(game.world.borrow().koth_x);
@@ -1134,7 +1134,7 @@ mod tests {
     fn test_remove_player() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid = game.add_player("TestBot", "", "oo").unwrap();
+        let pid = game.add_player("TestBot", "").unwrap();
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
         game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
@@ -1149,7 +1149,7 @@ mod tests {
     fn test_snapshot() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid = game.add_player("TestBot", "", "oo").unwrap();
+        let pid = game.add_player("TestBot", "").unwrap();
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
         game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
@@ -1164,8 +1164,8 @@ mod tests {
     fn test_check_winner_no_winner() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid1 = game.add_player("Bot1", "", "oo").unwrap();
-        let pid2 = game.add_player("Bot2", "", "oo").unwrap();
+        let pid1 = game.add_player("Bot1", "").unwrap();
+        let pid2 = game.add_player("Bot2", "").unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1180,8 +1180,8 @@ mod tests {
     fn test_check_winner_one_player_left() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid1 = game.add_player("Bot1", "", "oo").unwrap();
-        let _pid2 = game.add_player("Bot2", "", "oo").unwrap();
+        let pid1 = game.add_player("Bot1", "").unwrap();
+        let _pid2 = game.add_player("Bot2", "").unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1195,7 +1195,7 @@ mod tests {
     fn test_check_winner_single_player_no_win() {
         let world = make_test_world();
         let mut game = Game::new(world);
-        let pid1 = game.add_player("Bot1", "", "oo").unwrap();
+        let pid1 = game.add_player("Bot1", "").unwrap();
 
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
@@ -1216,7 +1216,7 @@ mod tests {
                 while true do end
             end
         "#;
-        let pid = game.add_player("InfiniteBot", code, "oo").unwrap();
+        let pid = game.add_player("InfiniteBot", code).unwrap();
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
         game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
@@ -1253,7 +1253,7 @@ mod tests {
                 self:wait_for_next_round()
             end
         "#;
-        let pid = game.add_player("SpawnLoopBot", code, "oo").unwrap();
+        let pid = game.add_player("SpawnLoopBot", code).unwrap();
         let cx = World::tile_center(3);
         let cy = World::tile_center(3);
         game.spawn_creature(pid, cx, cy, CREATURE_SMALL);

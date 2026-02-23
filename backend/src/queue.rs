@@ -125,7 +125,6 @@ pub fn spawn_queue_worker(
                         players.push(PlayerEntry {
                             name: qp.name.clone(),
                             code: v.code,
-                            api_type: v.api_type,
                         });
                         version_ids.push(qp.bot_version_id);
                     }

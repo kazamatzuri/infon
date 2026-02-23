@@ -43,7 +43,6 @@ pub struct UpdateBotRequest {
 #[derive(Deserialize)]
 pub struct CreateBotVersionRequest {
     pub code: String,
-    pub api_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -123,6 +122,11 @@ pub struct CreateTeamVersionRequest {
 pub struct CreateApiKeyRequest {
     pub name: String,
     pub scopes: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ValidateLuaRequest {
+    pub code: String,
 }
 
 // ── Shared application state ─────────────────────────────────────────
@@ -231,6 +235,8 @@ pub fn router(
             "/api/teams/{id}/versions",
             get(list_team_versions).post(create_team_version),
         )
+        // Lua validation
+        .route("/api/validate-lua", post(validate_lua))
         // Game control
         .route("/api/game/start", post(start_game))
         .route("/api/game/status", get(game_status))
@@ -387,14 +393,9 @@ async fn create_bot_version(
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "Bot not found").into_response(),
         Err(e) => return internal_error(e).into_response(),
     }
-    let api_type = req.api_type.unwrap_or_else(|| "oo".to_string());
-    if api_type != "oo" && api_type != "state" {
-        return json_error(StatusCode::BAD_REQUEST, "api_type must be 'oo' or 'state'")
-            .into_response();
-    }
     match state
         .db
-        .create_bot_version(bot_id, &req.code, &api_type)
+        .create_bot_version(bot_id, &req.code)
         .await
     {
         Ok(version) => (StatusCode::CREATED, Json(json!(version))).into_response(),
@@ -973,6 +974,31 @@ async fn leaderboard_2v2(
     }
 }
 
+// ── Lua validation handler ────────────────────────────────────────────
+
+async fn validate_lua(
+    _auth: AuthUser,
+    Json(req): Json<ValidateLuaRequest>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let lua = mlua::Lua::new();
+        match lua.load(&req.code).set_name("user_bot").into_function() {
+            Ok(_) => serde_json::json!({ "valid": true }),
+            Err(e) => serde_json::json!({ "valid": false, "error": e.to_string() }),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+        Err(_) => (
+            StatusCode::OK,
+            Json(json!({ "valid": false, "error": "Validation timed out" })),
+        )
+            .into_response(),
+    }
+}
+
 // ── Game control handlers ────────────────────────────────────────────
 
 async fn start_game(
@@ -1011,7 +1037,6 @@ async fn start_game(
         players.push(PlayerEntry {
             name,
             code: version.code,
-            api_type: version.api_type,
         });
     }
 
@@ -1241,12 +1266,10 @@ async fn create_challenge(
         PlayerEntry {
             name: name_a,
             code: version_a.code,
-            api_type: version_a.api_type,
         },
         PlayerEntry {
             name: name_b,
             code: version_b.code,
-            api_type: version_b.api_type,
         },
     ];
 

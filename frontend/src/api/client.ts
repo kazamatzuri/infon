@@ -28,7 +28,6 @@ export interface BotVersion {
   bot_id: number;
   version: number;
   code: string;
-  api_type: string;
   is_archived: boolean;
   elo_rating: number;
   elo_1v1: number;
@@ -198,7 +197,18 @@ export interface GameEndMsg {
   final_scores: PlayerSnapshot[];
 }
 
-export type GameMessage = WorldMsg | SnapshotMsg | GameEndMsg;
+export interface PlayerLoadErrorMsg {
+  type: 'player_load_error';
+  player_name: string;
+  error: string;
+}
+
+export interface ValidateLuaResult {
+  valid: boolean;
+  error?: string;
+}
+
+export type GameMessage = WorldMsg | SnapshotMsg | GameEndMsg | PlayerLoadErrorMsg;
 
 export interface TileSnapshot {
   x: number;
@@ -270,11 +280,11 @@ export const api = {
   listVersions: (botId: number): Promise<BotVersion[]> =>
     fetch(`${BASE_URL}/api/bots/${botId}/versions`, { headers: authHeaders() }).then(r => handleResponse<BotVersion[]>(r)),
 
-  createVersion: (botId: number, code: string, apiType?: string): Promise<BotVersion> =>
+  createVersion: (botId: number, code: string): Promise<BotVersion> =>
     fetch(`${BASE_URL}/api/bots/${botId}/versions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ code, api_type: apiType || 'oo' }),
+      body: JSON.stringify({ code }),
     }).then(r => handleResponse<BotVersion>(r)),
 
   getVersion: (botId: number, versionId: number): Promise<BotVersion> =>
@@ -420,6 +430,14 @@ export const api = {
     }).then(r => {
       if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
     }),
+
+  // Lua validation
+  validateLua: (code: string): Promise<ValidateLuaResult> =>
+    fetch(`${BASE_URL}/api/validate-lua`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ code }),
+    }).then(r => handleResponse<ValidateLuaResult>(r)),
 
   // Challenges
   createChallenge: (botVersionId: number, opponentBotVersionId: number, options?: { format?: string; headless?: boolean; map?: string }): Promise<ChallengeResult> =>
