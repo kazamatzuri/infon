@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Link } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Home } from './pages/Home';
 import { BotLibrary } from './pages/BotLibrary';
@@ -22,7 +22,7 @@ function NavBar() {
 
   return (
     <nav className="app-nav">
-      <h1 className="app-title">Infon Arena</h1>
+      <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}><h1 className="app-title">Infon Arena</h1></Link>
       {user ? (
         <>
           <NavLink to="/bots" className={navLinkClass}>Bot Library</NavLink>
