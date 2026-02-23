@@ -218,7 +218,16 @@ export interface ValidateLuaResult {
   error?: string;
 }
 
-export type GameMessage = WorldMsg | SnapshotMsg | GameEndMsg | PlayerLoadErrorMsg;
+export interface SnapshotDeltaMsg {
+  type: 'snapshot_delta';
+  game_time: number;
+  changed: CreatureSnapshot[];
+  removed: number[];
+  players: PlayerSnapshot[];
+  king_player_id?: number;
+}
+
+export type GameMessage = WorldMsg | SnapshotMsg | SnapshotDeltaMsg | GameEndMsg | PlayerLoadErrorMsg;
 
 export interface TileSnapshot {
   x: number;

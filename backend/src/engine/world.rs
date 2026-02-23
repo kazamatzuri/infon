@@ -122,6 +122,79 @@ impl World {
         }
     }
 
+    /// Generate a balanced map sized for the given player count.
+    ///
+    /// Maps scale proportionally:
+    /// - 2 players: ~30x30
+    /// - 4 players: ~50x50
+    /// - 8+ players: ~80x80
+    /// - 16+ players: ~100x100
+    ///
+    /// Features balanced resource distribution, walls around edges, KOTH in center,
+    /// and spawn points spread around the map.
+    pub fn generate_map(player_count: usize) -> Self {
+        let player_count = player_count.max(2);
+
+        // Scale map size with player count
+        let base_size = 30;
+        let size = match player_count {
+            0..=2 => base_size,
+            3..=4 => 50,
+            5..=8 => 80,
+            9..=16 => 100,
+            _ => (100 + (player_count - 16) * 2).min(150),
+        };
+
+        // More food for more players
+        let food_amount = 50000 + (player_count as i32 - 2) * 15000;
+        let num_food_spots = (10 + player_count * 2).min(40);
+
+        let params = RandomMapParams {
+            width: size,
+            height: size,
+            wall_density: 0.30, // slightly less walls for larger maps
+            food_amount,
+            num_food_spots,
+        };
+
+        let mut world = Self::generate_random(params);
+
+        // Add spawn points spread around the map for each player
+        // Place them in a ring around the center, evenly spaced
+        let center_x = size / 2;
+        let center_y = size / 2;
+        let ring_radius = (size as f64 * 0.35) as usize; // 35% of map size
+
+        let walkable: Vec<(usize, usize)> = (1..size - 1)
+            .flat_map(|x| (1..size - 1).map(move |y| (x, y)))
+            .filter(|&(x, y)| world.is_walkable(x, y))
+            .collect();
+
+        for i in 0..player_count {
+            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (player_count as f64);
+            let target_x = center_x as f64 + ring_radius as f64 * angle.cos();
+            let target_y = center_y as f64 + ring_radius as f64 * angle.sin();
+
+            // Find nearest walkable tile to the target spawn position
+            if let Some(&(sx, sy)) = walkable.iter().min_by_key(|&&(wx, wy)| {
+                let dx = wx as f64 - target_x;
+                let dy = wy as f64 - target_y;
+                (dx * dx + dy * dy) as usize
+            }) {
+                // Add a food spawner near each spawn point so players start near food
+                world.food_spawners.push(FoodSpawner {
+                    x: sx,
+                    y: sy,
+                    radius: 3,
+                    amount: 800,
+                    interval: 3000,
+                });
+            }
+        }
+
+        world
+    }
+
     /// Generate a random world using cellular automata for organic wall patterns.
     ///
     /// Algorithm:
@@ -132,8 +205,8 @@ impl World {
     /// 5. Place KOTH at nearest walkable tile to map center
     /// 6. Scatter food spawners on random walkable tiles
     pub fn generate_random(params: RandomMapParams) -> Self {
-        let width = params.width.clamp(20, 64);
-        let height = params.height.clamp(20, 64);
+        let width = params.width.clamp(20, 150);
+        let height = params.height.clamp(20, 150);
         let wall_density = params.wall_density.clamp(0.0, 0.6);
         let mut rng = rand::thread_rng();
 
@@ -911,5 +984,58 @@ mod tests {
         assert_eq!(w.koth_x, 5); // defaults to center
         assert_eq!(w.koth_y, 4);
         assert!(w.food_spawners.is_empty());
+    }
+
+    #[test]
+    fn test_generate_map_2_players() {
+        let w = World::generate_map(2);
+        assert_eq!(w.width, 30);
+        assert_eq!(w.height, 30);
+        // Border should be solid
+        assert!(!w.is_walkable(0, 0));
+        assert!(!w.is_walkable(29, 29));
+        // Should have walkable tiles
+        assert!(w.find_plain_tile().is_some());
+        // Should have food spawners (base + 2 spawn-point spawners)
+        assert!(w.food_spawners.len() >= 10);
+        // KOTH should be on a walkable tile
+        assert!(w.is_walkable(w.koth_x, w.koth_y));
+    }
+
+    #[test]
+    fn test_generate_map_4_players() {
+        let w = World::generate_map(4);
+        assert_eq!(w.width, 50);
+        assert_eq!(w.height, 50);
+        assert!(w.find_plain_tile().is_some());
+        assert!(w.is_walkable(w.koth_x, w.koth_y));
+        // Should have more food spawners for more players
+        assert!(w.food_spawners.len() >= 14);
+    }
+
+    #[test]
+    fn test_generate_map_8_players() {
+        let w = World::generate_map(8);
+        assert_eq!(w.width, 80);
+        assert_eq!(w.height, 80);
+        assert!(w.find_plain_tile().is_some());
+        assert!(w.is_walkable(w.koth_x, w.koth_y));
+    }
+
+    #[test]
+    fn test_generate_map_16_players() {
+        let w = World::generate_map(16);
+        assert_eq!(w.width, 100);
+        assert_eq!(w.height, 100);
+        assert!(w.find_plain_tile().is_some());
+    }
+
+    #[test]
+    fn test_generate_map_large_player_count() {
+        let w = World::generate_map(20);
+        // 100 + (20-16)*2 = 108
+        assert_eq!(w.width, 108);
+        assert_eq!(w.height, 108);
+        assert!(w.find_plain_tile().is_some());
     }
 }

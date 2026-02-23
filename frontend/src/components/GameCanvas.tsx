@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import type { WorldMsg, SnapshotMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg, MatchDetail } from '../api/client';
+import type { WorldMsg, SnapshotMsg, SnapshotDeltaMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg, MatchDetail, CreatureSnapshot } from '../api/client';
 import { api } from '../api/client';
 import {
   getTileSpriteForGfx, isSnowGfx,
@@ -293,6 +293,53 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
               if (hasNew) setConsoleLogs(new Map(consoleLogRef.current));
             }
             break;
+          case 'snapshot_delta': {
+            // Merge delta with last full snapshot
+            const delta = msg as SnapshotDeltaMsg;
+            const prev = snapshotRef.current;
+            if (prev) {
+              // Build a map of existing creatures
+              const creatureMap = new Map<number, CreatureSnapshot>();
+              for (const c of prev.creatures) {
+                creatureMap.set(c.id, c);
+              }
+              // Remove deleted creatures
+              for (const id of delta.removed) {
+                creatureMap.delete(id);
+              }
+              // Apply changed/new creatures
+              for (const c of delta.changed) {
+                creatureMap.set(c.id, c);
+              }
+              const merged: SnapshotMsg = {
+                type: 'snapshot',
+                game_time: delta.game_time,
+                creatures: Array.from(creatureMap.values()),
+                players: delta.players,
+                king_player_id: delta.king_player_id,
+              };
+              snapshotRef.current = merged;
+              setPlayers(merged.players || []);
+              setGameTime(merged.game_time || 0);
+            } else {
+              // No previous snapshot to merge with; ignore delta
+              // (next full snapshot will catch us up)
+            }
+            // Accumulate player output for console
+            {
+              let hasNew = false;
+              for (const p of (delta.players || [])) {
+                if (p.output && p.output.length > 0) {
+                  const existing = consoleLogRef.current.get(p.id) || [];
+                  const combined = [...existing, ...p.output];
+                  consoleLogRef.current.set(p.id, combined.slice(-500));
+                  hasNew = true;
+                }
+              }
+              if (hasNew) setConsoleLogs(new Map(consoleLogRef.current));
+            }
+            break;
+          }
           case 'player_load_error':
             setPlayerLoadErrors(prev => [...prev, msg]);
             break;
