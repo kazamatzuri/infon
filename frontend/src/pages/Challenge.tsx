@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Bot, BotVersion, MapInfo, ChallengeResult } from '../api/client';
 
@@ -156,6 +156,27 @@ export function Challenge() {
           <p style={{ color: '#aaa', fontSize: 13 }}>
             Status: {result.status ?? 'pending'}
           </p>
+          {(result.status === 'queued' || result.status === 'pending') && (
+            <p style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
+              Match is queued — replay will be available once it finishes.
+            </p>
+          )}
+          <Link
+            to={`/matches/${result.match_id ?? result.id}`}
+            style={{
+              display: 'inline-block',
+              marginTop: 12,
+              padding: '6px 16px',
+              background: '#16c79a',
+              color: '#fff',
+              borderRadius: 4,
+              textDecoration: 'none',
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            View Match Details
+          </Link>
         </div>
       )}
 

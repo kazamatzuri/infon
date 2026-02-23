@@ -197,6 +197,7 @@ pub fn router(
         .route("/api/bots/{id}/stats", get(get_bot_stats))
         // Matches
         .route("/api/matches", get(list_matches))
+        .route("/api/matches/mine", get(list_my_matches))
         .route("/api/matches/challenge", post(create_challenge))
         .route("/api/matches/{id}", get(get_match))
         .route("/api/matches/{id}/replay", get(get_match_replay))
@@ -1204,6 +1205,21 @@ async fn list_matches(
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(20).min(100);
     match state.db.list_recent_matches(limit).await {
+        Ok(matches) => (StatusCode::OK, Json(json!(matches))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+// ── My matches handler ───────────────────────────────────────────────
+
+async fn list_my_matches(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(50).min(100);
+    let offset = params.offset.unwrap_or(0).max(0);
+    match state.db.list_user_matches(auth.0.sub, limit, offset).await {
         Ok(matches) => (StatusCode::OK, Json(json!(matches))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }

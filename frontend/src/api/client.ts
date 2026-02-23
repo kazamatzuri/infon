@@ -436,6 +436,9 @@ export const api = {
   listMatches: (limit = 20): Promise<MatchDetail['match'][]> =>
     fetch(`${BASE_URL}/api/matches?limit=${limit}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),
 
+  listMyMatches: (limit = 50, offset = 0): Promise<MatchDetail['match'][]> =>
+    fetch(`${BASE_URL}/api/matches/mine?limit=${limit}&offset=${offset}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),
+
   // Teams
   listTeams: (): Promise<Team[]> =>
     fetch(`${BASE_URL}/api/teams`, { headers: authHeaders() }).then(r => handleResponse<Team[]>(r)),

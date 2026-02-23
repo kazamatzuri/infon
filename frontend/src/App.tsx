@@ -12,6 +12,7 @@ import { Register } from './pages/Register';
 import { Leaderboard } from './pages/Leaderboard';
 import { ApiKeys } from './pages/ApiKeys';
 import { Challenge } from './pages/Challenge';
+import { MyMatches } from './pages/MyMatches';
 import { Teams } from './pages/Teams';
 import { MatchDetail } from './pages/MatchDetail';
 import { Documentation } from './pages/Documentation';
@@ -50,6 +51,7 @@ function NavBar() {
         {user ? (
           <>
             <NavLink to="/challenge" className={navLinkClass}>Challenge</NavLink>
+            <NavLink to="/my-matches" className={navLinkClass}>My Matches</NavLink>
             <NavLink to="/teams" className={navLinkClass}>Teams</NavLink>
             <NavLink to="/api-keys" className={navLinkClass}>API Keys</NavLink>
             <NotificationBell />
@@ -89,6 +91,7 @@ function App() {
               <Route path="/teams" element={<ProtectedRoute><Teams /></ProtectedRoute>} />
               <Route path="/matches/:id" element={<MatchDetail />} />
               <Route path="/challenge" element={<ProtectedRoute><Challenge /></ProtectedRoute>} />
+              <Route path="/my-matches" element={<ProtectedRoute><MyMatches /></ProtectedRoute>} />
               <Route path="/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
               <Route path="/docs" element={<Documentation />} />
               <Route path="/about" element={<About />} />

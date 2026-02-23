@@ -1119,6 +1119,30 @@ impl Database {
         Ok(rows)
     }
 
+    pub async fn list_user_matches(
+        &self,
+        user_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Match>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Match>(
+            "SELECT DISTINCT m.id, m.format, m.map, m.status, m.winner_bot_version_id, m.created_at, m.finished_at \
+             FROM matches m \
+             JOIN match_participants mp ON mp.match_id = m.id \
+             JOIN bot_versions bv ON bv.id = mp.bot_version_id \
+             JOIN bots b ON b.id = bv.bot_id \
+             WHERE b.owner_id = $1 \
+             ORDER BY m.id DESC \
+             LIMIT $2 OFFSET $3",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn add_match_participant(
         &self,
         match_id: i64,

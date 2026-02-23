@@ -28,6 +28,7 @@ test.describe('Navigation & Layout', () => {
 
     // Authenticated-only links should NOT be visible
     await expect(nav.getByRole('link', { name: 'Challenge' })).not.toBeVisible();
+    await expect(nav.getByRole('link', { name: 'My Matches' })).not.toBeVisible();
     await expect(nav.getByRole('link', { name: 'Teams' })).not.toBeVisible();
     await expect(nav.getByRole('link', { name: 'API Keys' })).not.toBeVisible();
   });
@@ -69,6 +70,9 @@ test.describe('Navigation & Layout', () => {
     await expect(page).toHaveURL('/login', { timeout: 5000 });
 
     await page.goto('/challenge');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+
+    await page.goto('/my-matches');
     await expect(page).toHaveURL('/login', { timeout: 5000 });
 
     await page.goto('/teams');
