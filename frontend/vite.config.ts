@@ -18,6 +18,14 @@ export default defineConfig({
         target: process.env.VITE_API_URL || 'http://localhost:3000',
         ws: true,
       },
+      '/llms.txt': {
+        target: process.env.VITE_API_URL || 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/llms-full.txt': {
+        target: process.env.VITE_API_URL || 'http://localhost:3000',
+        changeOrigin: true,
+      },
     },
   },
 })

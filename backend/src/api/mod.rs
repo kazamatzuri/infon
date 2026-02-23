@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use std::path::PathBuf;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::Database;
 use crate::engine::server::{self, GameResult, GameServer, PlayerEntry};
 use crate::engine::world::World;
@@ -127,6 +127,12 @@ pub struct CreateApiKeyRequest {
 #[derive(Deserialize)]
 pub struct ValidateLuaRequest {
     pub code: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateFeedbackRequest {
+    pub category: String,
+    pub description: String,
 }
 
 // ── Shared application state ─────────────────────────────────────────
@@ -247,6 +253,9 @@ pub fn router(
         // Documentation
         .route("/api/docs/lua-api", get(get_lua_api_docs))
         .route("/llms.txt", get(get_llms_txt))
+        .route("/llms-full.txt", get(get_llms_full_txt))
+        // Feedback
+        .route("/api/feedback", get(list_feedback).post(create_feedback))
         // WebSocket
         .route("/ws/game", get(ws::ws_game))
         .with_state(state)
@@ -1972,4 +1981,56 @@ async fn get_llms_txt() -> impl IntoResponse {
         crate::llms_txt::LLMS_TXT,
     )
         .into_response()
+}
+
+async fn get_llms_full_txt() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; charset=utf-8")],
+        crate::llms_txt::LLMS_FULL_TXT,
+    )
+        .into_response()
+}
+
+// ── Feedback handlers ─────────────────────────────────────────────────
+
+async fn create_feedback(
+    State(state): State<AppState>,
+    auth: OptionalAuthUser,
+    Json(req): Json<CreateFeedbackRequest>,
+) -> impl IntoResponse {
+    let valid_categories = ["bug", "feature", "general"];
+    if !valid_categories.contains(&req.category.as_str()) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "category must be 'bug', 'feature', or 'general'",
+        )
+        .into_response();
+    }
+    if req.description.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "description is required").into_response();
+    }
+
+    let user_id = auth.0.map(|c| c.sub);
+    match state
+        .db
+        .create_feedback(user_id, &req.category, &req.description)
+        .await
+    {
+        Ok(feedback) => (StatusCode::CREATED, Json(json!(feedback))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn list_feedback(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> impl IntoResponse {
+    if auth.0.role != "admin" {
+        return json_error(StatusCode::FORBIDDEN, "Admin access required").into_response();
+    }
+    match state.db.list_feedback().await {
+        Ok(feedback) => (StatusCode::OK, Json(json!(feedback))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
 }

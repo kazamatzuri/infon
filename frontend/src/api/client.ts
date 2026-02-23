@@ -218,6 +218,14 @@ export interface ValidateLuaResult {
   error?: string;
 }
 
+export interface Feedback {
+  id: number;
+  user_id: number | null;
+  category: string;
+  description: string;
+  created_at: string;
+}
+
 export type GameMessage = WorldMsg | SnapshotMsg | GameEndMsg | PlayerLoadErrorMsg;
 
 export interface TileSnapshot {
@@ -462,4 +470,15 @@ export const api = {
         map: options?.map,
       }),
     }).then(r => handleResponse<ChallengeResult>(r)),
+
+  // Feedback
+  submitFeedback: (category: string, description: string): Promise<Feedback> =>
+    fetch(`${BASE_URL}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ category, description }),
+    }).then(r => handleResponse<Feedback>(r)),
+
+  listFeedback: (): Promise<Feedback[]> =>
+    fetch(`${BASE_URL}/api/feedback`, { headers: authHeaders() }).then(r => handleResponse<Feedback[]>(r)),
 };

@@ -14,7 +14,9 @@ import { Challenge } from './pages/Challenge';
 import { Teams } from './pages/Teams';
 import { MatchDetail } from './pages/MatchDetail';
 import { Documentation } from './pages/Documentation';
+import { About } from './pages/About';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { FeedbackButton } from './components/FeedbackButton';
 import './App.css';
 
 function NavBar() {
@@ -31,12 +33,14 @@ function NavBar() {
           <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
           <NavLink to="/game" className={navLinkClass}>Game</NavLink>
           <NavLink to="/docs" className={navLinkClass}>Docs</NavLink>
+          <NavLink to="/about" className={navLinkClass}>About</NavLink>
         </>
       ) : (
         <>
           <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
           <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
           <NavLink to="/docs" className={navLinkClass}>Docs</NavLink>
+          <NavLink to="/about" className={navLinkClass}>About</NavLink>
         </>
       )}
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -82,10 +86,12 @@ function App() {
               <Route path="/challenge" element={<ProtectedRoute><Challenge /></ProtectedRoute>} />
               <Route path="/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
               <Route path="/docs" element={<Documentation />} />
+              <Route path="/about" element={<About />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
             </Routes>
           </main>
+          <FeedbackButton />
         </div>
       </AuthProvider>
     </BrowserRouter>
