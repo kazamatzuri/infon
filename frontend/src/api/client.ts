@@ -109,6 +109,32 @@ export interface ChallengeResult {
   status?: string;
 }
 
+export interface ActiveGameInfo {
+  match_id: number | null;
+  player_names: string[];
+  format: string;
+  map: string;
+  start_time: string;
+  spectator_count: number;
+  game_time_seconds: number;
+}
+
+export interface Notification {
+  id: number;
+  user_id: number;
+  type: string;
+  title: string;
+  message: string;
+  data: string | null;
+  read: boolean;
+  created_at: string;
+}
+
+export interface NotificationsResponse {
+  notifications: Notification[];
+  unread_count: number;
+}
+
 export interface MatchDetail {
   match: {
     id: number;
@@ -462,4 +488,20 @@ export const api = {
         map: options?.map,
       }),
     }).then(r => handleResponse<ChallengeResult>(r)),
+
+  // Active games
+  listActiveGames: (): Promise<ActiveGameInfo[]> =>
+    fetch(`${BASE_URL}/api/games/active`).then(r => handleResponse<ActiveGameInfo[]>(r)),
+
+  // Notifications
+  listNotifications: (): Promise<NotificationsResponse> =>
+    fetch(`${BASE_URL}/api/notifications`, { headers: authHeaders() }).then(r => handleResponse<NotificationsResponse>(r)),
+
+  markNotificationRead: (id: number): Promise<void> =>
+    fetch(`${BASE_URL}/api/notifications/${id}/read`, {
+      method: 'POST',
+      headers: authHeaders(),
+    }).then(r => {
+      if (!r.ok) throw new Error(`Mark read failed: ${r.status}`);
+    }),
 };

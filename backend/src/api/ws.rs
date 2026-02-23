@@ -1,4 +1,8 @@
 // WebSocket handler for game state streaming.
+// TODO: Phase 10.3 - Add live match chat support. This requires moderation
+// infrastructure (rate limiting, filtering, user muting) before implementation.
+// When added, client messages should be parsed as chat messages and broadcast
+// to other spectators via a separate chat channel.
 
 use axum::{
     extract::{

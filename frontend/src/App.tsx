@@ -6,6 +6,7 @@ import { BotEditor } from './pages/BotEditor';
 import { TournamentList } from './pages/TournamentList';
 import { TournamentDetail } from './pages/TournamentDetail';
 import { GameViewer } from './pages/GameViewer';
+import { GameList } from './pages/GameList';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Leaderboard } from './pages/Leaderboard';
@@ -15,6 +16,7 @@ import { Teams } from './pages/Teams';
 import { MatchDetail } from './pages/MatchDetail';
 import { Documentation } from './pages/Documentation';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { NotificationBell } from './components/NotificationBell';
 import './App.css';
 
 function NavBar() {
@@ -29,13 +31,14 @@ function NavBar() {
           <NavLink to="/editor" className={navLinkClass}>Editor</NavLink>
           <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
           <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
-          <NavLink to="/game" className={navLinkClass}>Game</NavLink>
+          <NavLink to="/games" className={navLinkClass}>Games</NavLink>
           <NavLink to="/docs" className={navLinkClass}>Docs</NavLink>
         </>
       ) : (
         <>
           <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
           <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
+          <NavLink to="/games" className={navLinkClass}>Games</NavLink>
           <NavLink to="/docs" className={navLinkClass}>Docs</NavLink>
         </>
       )}
@@ -45,6 +48,7 @@ function NavBar() {
             <NavLink to="/challenge" className={navLinkClass}>Challenge</NavLink>
             <NavLink to="/teams" className={navLinkClass}>Teams</NavLink>
             <NavLink to="/api-keys" className={navLinkClass}>API Keys</NavLink>
+            <NotificationBell />
             <span style={{ color: '#aaa', fontSize: 14 }}>{user.username}</span>
             <button onClick={logout} style={{ padding: '4px 12px', fontSize: 13, cursor: 'pointer' }}>
               Logout
@@ -76,6 +80,7 @@ function App() {
               <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/tournaments" element={<TournamentList />} />
               <Route path="/tournaments/:id" element={<TournamentDetail />} />
+              <Route path="/games" element={<GameList />} />
               <Route path="/game" element={<ProtectedRoute><GameViewer /></ProtectedRoute>} />
               <Route path="/teams" element={<ProtectedRoute><Teams /></ProtectedRoute>} />
               <Route path="/matches/:id" element={<MatchDetail />} />
