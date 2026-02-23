@@ -10,6 +10,16 @@ use super::lua_api::{self, LuaGameState};
 use super::player::Player;
 use super::world::World;
 
+/// Map a creature type constant to a string label for metrics.
+fn creature_type_label(creature_type: u8) -> &'static str {
+    match creature_type {
+        CREATURE_SMALL => "small",
+        CREATURE_BIG => "big",
+        CREATURE_FLYER => "flyer",
+        _ => "unknown",
+    }
+}
+
 /// Per-player game statistics tracked during gameplay.
 #[derive(Debug, Default, Clone)]
 pub struct PlayerStats {
@@ -240,6 +250,11 @@ impl Game {
             .or_default()
             .creatures_spawned += 1;
 
+        // Metrics
+        crate::metrics::CREATURES_SPAWNED_TOTAL
+            .with_label_values(&[creature_type_label(creature_type)])
+            .inc();
+
         // Queue spawn event for the owning player
         self.pending_events
             .entry(player_id)
@@ -274,6 +289,11 @@ impl Game {
             .or_default()
             .creatures_spawned += 1;
 
+        // Metrics
+        crate::metrics::CREATURES_SPAWNED_TOTAL
+            .with_label_values(&[creature_type_label(creature_type)])
+            .inc();
+
         self.pending_events
             .entry(player_id)
             .or_default()
@@ -291,8 +311,12 @@ impl Game {
             .creatures
             .borrow()
             .get(&creature_id)
-            .map(|c| (c.player_id, c.id));
-        if let Some((player_id, _)) = creature {
+            .map(|c| (c.player_id, c.id, c.creature_type));
+        if let Some((player_id, _, ctype)) = creature {
+            // Metrics
+            crate::metrics::CREATURES_KILLED_TOTAL
+                .with_label_values(&[creature_type_label(ctype)])
+                .inc();
             // Track creatures_lost for the owner
             self.player_stats
                 .entry(player_id)

@@ -19,6 +19,7 @@ use crate::auth::AuthUser;
 use crate::db::Database;
 use crate::engine::server::{self, GameResult, GameServer, PlayerEntry};
 use crate::engine::world::World;
+use crate::metrics;
 use crate::queue::GameQueue;
 use crate::rate_limit::{RateLimitType, RateLimiter};
 use crate::tournament::{
@@ -398,7 +399,10 @@ async fn create_bot_version(
         .create_bot_version(bot_id, &req.code)
         .await
     {
-        Ok(version) => (StatusCode::CREATED, Json(json!(version))).into_response(),
+        Ok(version) => {
+            metrics::BOT_SUBMISSIONS_TOTAL.inc();
+            (StatusCode::CREATED, Json(json!(version))).into_response()
+        }
         Err(e) => internal_error(e).into_response(),
     }
 }
@@ -984,18 +988,24 @@ async fn validate_lua(
         let lua = mlua::Lua::new();
         match lua.load(&req.code).set_name("user_bot").into_function() {
             Ok(_) => serde_json::json!({ "valid": true }),
-            Err(e) => serde_json::json!({ "valid": false, "error": e.to_string() }),
+            Err(e) => {
+                metrics::BOT_VALIDATION_FAILURES_TOTAL.inc();
+                serde_json::json!({ "valid": false, "error": e.to_string() })
+            }
         }
     })
     .await;
 
     match result {
         Ok(json) => (StatusCode::OK, Json(json)).into_response(),
-        Err(_) => (
-            StatusCode::OK,
-            Json(json!({ "valid": false, "error": "Validation timed out" })),
-        )
-            .into_response(),
+        Err(_) => {
+            metrics::BOT_VALIDATION_FAILURES_TOTAL.inc();
+            (
+                StatusCode::OK,
+                Json(json!({ "valid": false, "error": "Validation timed out" })),
+            )
+                .into_response()
+        }
     }
 }
 

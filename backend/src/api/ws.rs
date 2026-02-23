@@ -8,6 +8,8 @@ use axum::{
     response::IntoResponse,
 };
 
+use crate::metrics;
+
 use super::AppState;
 
 /// WebSocket upgrade handler for game state streaming.
@@ -16,13 +18,16 @@ pub async fn ws_game(ws: WebSocketUpgrade, State(state): State<AppState>) -> imp
 }
 
 async fn handle_ws(mut socket: WebSocket, state: AppState) {
+    metrics::CONNECTED_WEBSOCKETS.inc();
     let mut rx = state.game_server.subscribe();
 
     // Send cached world snapshot so late joiners see the map immediately.
     if let Some(world_json) = state.game_server.world_json() {
         if socket.send(Message::Text(world_json.into())).await.is_err() {
+            metrics::CONNECTED_WEBSOCKETS.dec();
             return;
         }
+        metrics::WEBSOCKET_MESSAGES_SENT_TOTAL.inc();
     }
 
     // Forward all broadcast messages to the WebSocket client.
@@ -37,6 +42,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
                             // Client disconnected
                             break;
                         }
+                        metrics::WEBSOCKET_MESSAGES_SENT_TOTAL.inc();
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         // Channel closed, game ended
@@ -61,4 +67,6 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
             }
         }
     }
+
+    metrics::CONNECTED_WEBSOCKETS.dec();
 }
