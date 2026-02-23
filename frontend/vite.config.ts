@@ -8,7 +8,9 @@ export default defineConfig({
     // In Docker the backend service is reachable by container name on the
     // internal network. Outside Docker it falls back to localhost.
     proxy: {
-      '/api': {
+      // Use /api/ (with trailing slash) so that /api-keys (a frontend route)
+      // is not accidentally proxied to the backend.
+      '/api/': {
         target: process.env.VITE_API_URL || 'http://localhost:3000',
         changeOrigin: true,
       },

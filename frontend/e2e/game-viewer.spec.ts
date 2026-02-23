@@ -1,7 +1,21 @@
 import { test, expect } from '@playwright/test';
 
+const uniqueId = () => Math.random().toString(36).substring(2, 10);
+
+async function registerUser(page: import('@playwright/test').Page) {
+  const username = `gametest_${uniqueId()}`;
+  await page.goto('/register');
+  await page.locator('label:has-text("Username") + input').fill(username);
+  await page.locator('label:has-text("Email") + input').fill(`${username}@test.local`);
+  await page.locator('label:has-text("Password") + input').fill('TestPass1234');
+  await page.getByRole('button', { name: /Register/ }).click();
+  await expect(page).toHaveURL('/bots', { timeout: 10000 });
+  return username;
+}
+
 test.describe('Game Viewer Page', () => {
   test('shows setup UI or live game', async ({ page }) => {
+    await registerUser(page);
     await page.goto('/game');
     await page.waitForTimeout(2000);
 
@@ -30,6 +44,7 @@ test.describe('Game Viewer Page', () => {
   });
 
   test('shows error when starting with no bots selected', async ({ page }) => {
+    await registerUser(page);
     await page.goto('/game');
     await page.waitForTimeout(2000);
 
@@ -45,6 +60,7 @@ test.describe('Game Viewer Page', () => {
   });
 
   test('add and remove player slots when bots exist', async ({ page }) => {
+    await registerUser(page);
     await page.goto('/game');
     await page.waitForTimeout(2000);
 
@@ -70,5 +86,10 @@ test.describe('Game Viewer Page', () => {
     // Remove one
     await removeButtons.last().click();
     expect(await page.locator('input[placeholder="Name"]').count()).toBe(2);
+  });
+
+  test('unauthenticated user is redirected to login', async ({ page }) => {
+    await page.goto('/game', { waitUntil: 'networkidle' });
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
   });
 });

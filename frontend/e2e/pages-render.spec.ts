@@ -5,8 +5,9 @@ import { test, expect } from '@playwright/test';
 test.describe('Page Rendering - Public Routes', () => {
   test('/ (Home) renders landing page for unauthenticated user', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Infon Arena' })).toBeVisible();
-    await expect(page.getByText('Program your bots')).toBeVisible();
+    const main = page.locator('main');
+    await expect(main.getByRole('heading', { name: 'Infon Arena' })).toBeVisible();
+    await expect(main.getByText('Program your bots')).toBeVisible();
   });
 
   test('/leaderboard renders with tabs', async ({ page }) => {
@@ -48,11 +49,17 @@ test.describe('Page Rendering - Public Routes', () => {
 
 test.describe('Page Rendering - Auth-Gated Routes', () => {
   test('protected routes redirect to login', async ({ page }) => {
-    for (const path of ['/bots', '/editor', '/game', '/challenge', '/teams', '/api-keys']) {
+    for (const path of ['/bots', '/editor', '/game', '/challenge', '/teams']) {
       await page.goto(path);
       await expect(page).toHaveURL('/login', { timeout: 5000 });
       await expect(page.locator('nav.app-nav')).toBeVisible();
     }
+  });
+
+  test('/api-keys redirects to login when unauthenticated', async ({ page }) => {
+    await page.goto('/api-keys');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+    await expect(page.locator('nav.app-nav')).toBeVisible();
   });
 
   test('/matches/999 renders without crash for nonexistent match', async ({ page }) => {

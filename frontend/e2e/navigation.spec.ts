@@ -33,31 +33,49 @@ test.describe('Navigation & Layout', () => {
 
   test('landing page shows for unauthenticated user', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Infon Arena' })).toBeVisible();
-    await expect(page.getByText('Program your bots')).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Start Competing' })).toBeVisible();
+    const main = page.locator('main');
+    await expect(main.getByRole('heading', { name: 'Infon Arena' })).toBeVisible();
+    await expect(main.getByText('Program your bots')).toBeVisible();
+    await expect(main.getByRole('link', { name: 'Start Competing' })).toBeVisible();
   });
 
   test('clicking nav links navigates to correct pages', async ({ page }) => {
     await page.goto('/');
+    const nav = page.locator('nav.app-nav');
 
-    await page.getByRole('link', { name: 'Leaderboard' }).click();
+    await nav.getByRole('link', { name: 'Leaderboard' }).click();
     await expect(page).toHaveURL('/leaderboard');
     await expect(page.getByRole('heading', { name: 'Leaderboards' })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Tournaments' }).click();
+    await nav.getByRole('link', { name: 'Tournaments' }).click();
     await expect(page).toHaveURL('/tournaments');
     await expect(page.getByRole('heading', { name: 'Tournaments' })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Docs' }).click();
+    await nav.getByRole('link', { name: 'Docs' }).click();
     await expect(page).toHaveURL('/docs');
     await expect(page.getByRole('heading', { name: 'Lua API Reference' })).toBeVisible();
   });
 
   test('protected routes redirect to login when unauthenticated', async ({ page }) => {
-    for (const path of ['/bots', '/editor', '/game', '/challenge', '/api-keys', '/teams']) {
-      await page.goto(path);
-      await expect(page).toHaveURL('/login', { timeout: 5000 });
-    }
+    // Test each protected route in separate navigations
+    await page.goto('/bots');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+
+    await page.goto('/editor');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+
+    await page.goto('/game');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+
+    await page.goto('/challenge');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+
+    await page.goto('/teams');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
+  });
+
+  test('/api-keys redirects to login when unauthenticated', async ({ page }) => {
+    await page.goto('/api-keys');
+    await expect(page).toHaveURL('/login', { timeout: 5000 });
   });
 });
