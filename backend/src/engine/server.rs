@@ -107,6 +107,9 @@ pub enum GameMessage {
     GameEnd {
         winner: Option<u32>,
         final_scores: Vec<PlayerSnapshot>,
+        match_id: Option<i64>,
+        player_stats: Vec<PlayerEndStats>,
+        game_duration_ticks: u64,
     },
     /// A player failed to load (e.g. Lua syntax error).
     #[serde(rename = "player_load_error")]
@@ -114,6 +117,15 @@ pub enum GameMessage {
         player_name: String,
         error: String,
     },
+}
+
+/// Per-player combat stats included in the GameEnd message.
+#[derive(Clone, Serialize, Debug)]
+pub struct PlayerEndStats {
+    pub player_id: u32,
+    pub creatures_spawned: i32,
+    pub creatures_killed: i32,
+    pub creatures_lost: i32,
 }
 
 /// A player entry for starting a game.
@@ -290,9 +302,25 @@ impl GameServer {
                         .map(|p| p.id)
                 });
 
+                let end_player_stats: Vec<PlayerEndStats> = player_ids
+                    .iter()
+                    .map(|&pid| {
+                        let stats = game.player_stats(pid);
+                        PlayerEndStats {
+                            player_id: pid,
+                            creatures_spawned: stats.creatures_spawned,
+                            creatures_killed: stats.creatures_killed,
+                            creatures_lost: stats.creatures_lost,
+                        }
+                    })
+                    .collect();
+
                 let end_msg = GameMessage::GameEnd {
                     winner,
                     final_scores: final_snap.players.clone(),
+                    match_id,
+                    player_stats: end_player_stats,
+                    game_duration_ticks: tick_count,
                 };
                 if let Ok(json) = serde_json::to_string(&end_msg) {
                     let _ = tx.send(json.clone());
@@ -407,6 +435,9 @@ mod tests {
         let end_msg = GameMessage::GameEnd {
             winner: Some(1),
             final_scores: vec![],
+            match_id: None,
+            player_stats: vec![],
+            game_duration_ticks: 100,
         };
         let json = serde_json::to_string(&end_msg).unwrap();
         assert!(json.contains("\"type\":\"game_end\""));

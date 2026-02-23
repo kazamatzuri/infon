@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import type { WorldMsg, SnapshotMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg } from '../api/client';
+import type { WorldMsg, SnapshotMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg, MatchDetail } from '../api/client';
+import { api } from '../api/client';
 import {
   getTileSpriteForGfx, isSnowGfx,
   FOOD_SPRITES, SNOW_FOOD_SPRITES,
@@ -51,9 +52,11 @@ function createTintedCreature(
 
 interface GameCanvasProps {
   wsUrl: string;
+  onGameEnd?: () => void;
+  onNewGame?: () => void;
 }
 
-export function GameCanvas({ wsUrl }: GameCanvasProps) {
+export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const worldRef = useRef<WorldMsg | null>(null);
   const snapshotRef = useRef<SnapshotMsg | null>(null);
@@ -66,6 +69,8 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
   const [sidebarTab, setSidebarTab] = useState<'scores' | 'console'>('scores');
   const consoleLogRef = useRef<Map<number, string[]>>(new Map());
   const [consoleLogs, setConsoleLogs] = useState<Map<number, string[]>>(new Map());
+  const [matchDetail, setMatchDetail] = useState<MatchDetail | null>(null);
+  const onGameEndRef = useRef(onGameEnd);
 
 
   const spriteSheetRef = useRef<HTMLImageElement | null>(null);
@@ -75,6 +80,8 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
   const creatureCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const drawRef = useRef<() => void>(() => {});
   const lastWorldRef = useRef<WorldMsg | null>(null);
+
+  useEffect(() => { onGameEndRef.current = onGameEnd; }, [onGameEnd]);
 
   // Load sprite sheet
   useEffect(() => {
@@ -291,6 +298,7 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
             break;
           case 'game_end':
             setGameEnd(msg);
+            onGameEndRef.current?.();
             break;
         }
       } catch {
@@ -306,6 +314,30 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
     animFrameRef.current = requestAnimationFrame(drawRef.current);
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [draw]);
+
+  // Fetch match detail (for Elo) when game ends with a match_id
+  useEffect(() => {
+    if (!gameEnd?.match_id) return;
+    const matchId = gameEnd.match_id;
+    let cancelled = false;
+
+    const poll = async () => {
+      // Wait a bit for the completion callback to finish
+      await new Promise(r => setTimeout(r, 2000));
+      for (let attempt = 0; attempt < 5 && !cancelled; attempt++) {
+        try {
+          const detail = await api.getMatch(matchId);
+          if (!cancelled) {
+            setMatchDetail(detail);
+            if (detail.match.status === 'finished') return;
+          }
+        } catch { /* ignore */ }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [gameEnd]);
 
   // Resize canvas to fit container
   useEffect(() => {
@@ -335,22 +367,113 @@ export function GameCanvas({ wsUrl }: GameCanvasProps) {
             Connecting to game server...
           </div>
         )}
-        {gameEnd && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            background: 'rgba(0,0,0,0.85)', padding: '32px', borderRadius: '12px',
-            color: '#e0e0e0', textAlign: 'center', border: '1px solid #333',
-          }}>
-            <h2 style={{ color: '#f5a623', margin: '0 0 16px 0' }}>Game Over</h2>
-            {gameEnd.final_scores
-              .sort((a, b) => b.score - a.score)
-              .map((p, i) => (
-                <div key={p.id} style={{ padding: '4px 0', color: i === 0 ? '#16c79a' : '#aaa' }}>
-                  #{i + 1} {p.name}: {p.score} pts ({p.num_creatures} creatures)
+        {gameEnd && (() => {
+          const sorted = [...gameEnd.final_scores].sort((a, b) => b.score - a.score);
+          const winnerName = gameEnd.winner != null
+            ? gameEnd.final_scores.find(p => p.id === gameEnd.winner)?.name ?? 'Unknown'
+            : null;
+          const ticks = gameEnd.game_duration_ticks ?? 0;
+          const totalSec = Math.round(ticks * 0.1);
+          const mins = Math.floor(totalSec / 60);
+          const secs = totalSec % 60;
+          const durationStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+
+          // Build elo lookup from match detail participants
+          const eloMap = new Map<number, { before: number; after: number }>();
+          if (matchDetail?.match.status === 'finished') {
+            for (const mp of matchDetail.participants) {
+              if (mp.elo_before != null && mp.elo_after != null) {
+                eloMap.set(mp.player_slot, { before: mp.elo_before, after: mp.elo_after });
+              }
+            }
+          }
+
+          return (
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              background: 'rgba(0,0,0,0.92)', padding: '28px 36px', borderRadius: '12px',
+              color: '#e0e0e0', border: '1px solid #444', minWidth: '360px', maxWidth: '500px',
+              fontFamily: 'monospace',
+            }}>
+              <h2 style={{ color: '#f5a623', margin: '0 0 4px 0', textAlign: 'center', fontSize: '20px' }}>
+                GAME OVER
+              </h2>
+              {winnerName && (
+                <div style={{ textAlign: 'center', color: '#16c79a', fontSize: '14px', marginBottom: '8px' }}>
+                  Winner: {winnerName}
                 </div>
-              ))}
-          </div>
-        )}
+              )}
+              <div style={{ textAlign: 'center', color: '#888', fontSize: '12px', marginBottom: '16px' }}>
+                Duration: {durationStr} ({ticks.toLocaleString()} ticks)
+              </div>
+
+              {sorted.map((p, i) => {
+                const stats = gameEnd.player_stats?.find(s => s.player_id === p.id);
+                const elo = eloMap.get(i);
+                const isWinner = gameEnd.winner != null && p.id === gameEnd.winner;
+                return (
+                  <div key={p.id} style={{
+                    padding: '8px 10px', marginBottom: '8px', background: '#111',
+                    borderRadius: '6px',
+                    borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ color: isWinner ? '#16c79a' : '#ccc', fontWeight: 600, fontSize: '14px' }}>
+                        #{i + 1} {p.name}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ color: '#f5a623', fontSize: '14px' }}>{p.score.toLocaleString()} pts</span>
+                        {isWinner && <span style={{ color: '#16c79a', fontWeight: 700, fontSize: '12px' }}>W</span>}
+                      </span>
+                    </div>
+                    {stats && (
+                      <div style={{ color: '#888', fontSize: '11px', marginTop: '4px' }}>
+                        Spawned: {stats.creatures_spawned} &nbsp; Killed: {stats.creatures_killed} &nbsp; Lost: {stats.creatures_lost}
+                      </div>
+                    )}
+                    {elo && (
+                      <div style={{ fontSize: '11px', marginTop: '2px' }}>
+                        <span style={{ color: '#888' }}>Elo: {elo.before}</span>
+                        <span style={{ color: '#888' }}> → {elo.after} </span>
+                        <span style={{ color: elo.after >= elo.before ? '#16c79a' : '#e94560', fontWeight: 600 }}>
+                          ({elo.after >= elo.before ? '+' : ''}{elo.after - elo.before})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '16px' }}>
+                {gameEnd.match_id && (
+                  <a
+                    href={`/replay/${gameEnd.match_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      padding: '8px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: 600,
+                      color: '#f5a623', border: '1px solid #f5a623', background: 'transparent',
+                      textDecoration: 'none', cursor: 'pointer',
+                    }}
+                  >
+                    Watch Replay
+                  </a>
+                )}
+                {onNewGame && (
+                  <button
+                    onClick={onNewGame}
+                    style={{
+                      padding: '8px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: 600,
+                      color: '#fff', background: '#16c79a', border: 'none', cursor: 'pointer',
+                    }}
+                  >
+                    New Game
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Sidebar panel */}

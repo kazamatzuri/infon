@@ -24,6 +24,7 @@ export function GameViewer() {
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [gameEnded, setGameEnded] = useState(false);
 
   // Check game status and load bots on mount
   useEffect(() => {
@@ -136,14 +137,25 @@ export function GameViewer() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ padding: '8px 24px', background: '#16213e', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>Live Game</span>
+          <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>
+            {gameEnded ? 'Game Finished' : 'Live Game'}
+          </span>
           <div style={{ flex: 1 }} />
-          <button onClick={handleStop} disabled={stopping} style={btnStop}>
-            {stopping ? 'Stopping...' : 'Stop Game'}
-          </button>
+          {!gameEnded && (
+            <button onClick={handleStop} disabled={stopping} style={btnStop}>
+              {stopping ? 'Stopping...' : 'Stop Game'}
+            </button>
+          )}
         </div>
         <div style={{ flex: 1, minHeight: 0 }}>
-          <GameCanvas wsUrl={WS_URL} />
+          <GameCanvas
+            wsUrl={WS_URL}
+            onGameEnd={() => setGameEnded(true)}
+            onNewGame={() => {
+              setGameEnded(false);
+              setPhase('setup');
+            }}
+          />
         </div>
       </div>
     );

@@ -191,10 +191,20 @@ export interface SnapshotMsg {
   king_player_id?: number;
 }
 
+export interface PlayerEndStats {
+  player_id: number;
+  creatures_spawned: number;
+  creatures_killed: number;
+  creatures_lost: number;
+}
+
 export interface GameEndMsg {
   type: 'game_end';
   winner?: number;
   final_scores: PlayerSnapshot[];
+  match_id?: number;
+  player_stats?: PlayerEndStats[];
+  game_duration_ticks?: number;
 }
 
 export interface PlayerLoadErrorMsg {
@@ -347,7 +357,7 @@ export const api = {
   listMaps: (): Promise<MapInfo[]> =>
     fetch(`${BASE_URL}/api/maps`).then(r => handleResponse<MapInfo[]>(r)),
 
-  startGame: (players: { bot_version_id: number; name?: string }[], map?: string): Promise<{ status: string; message: string }> =>
+  startGame: (players: { bot_version_id: number; name?: string }[], map?: string): Promise<{ status: string; message: string; match_id?: number }> =>
     fetch(`${BASE_URL}/api/game/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },

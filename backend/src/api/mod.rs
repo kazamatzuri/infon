@@ -1016,6 +1016,7 @@ async fn start_game(
     }
 
     let mut players = Vec::new();
+    let mut bot_version_ids = Vec::new();
     for (i, p) in req.players.iter().enumerate() {
         let version = match state.db.get_bot_version_by_id(p.bot_version_id).await {
             Ok(Some(v)) => v,
@@ -1034,6 +1035,7 @@ async fn start_game(
             .clone()
             .unwrap_or_else(|| format!("Player {}", i + 1));
 
+        bot_version_ids.push(p.bot_version_id);
         players.push(PlayerEntry {
             name,
             code: version.code,
@@ -1048,11 +1050,48 @@ async fn start_game(
         }
     };
 
-    match state.game_server.start_game(world, players, None) {
+    // Create match record in DB
+    let map_name = req.map.clone().unwrap_or_else(|| "random".to_string());
+    let format = if players.len() == 2 { "1v1" } else { "ffa" };
+    let m = match state.db.create_match(format, &map_name).await {
+        Ok(m) => m,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // Add participants
+    for (slot, &bvid) in bot_version_ids.iter().enumerate() {
+        if let Err(e) = state
+            .db
+            .add_match_participant(m.id, bvid, slot as i32)
+            .await
+        {
+            return internal_error(e).into_response();
+        }
+    }
+
+    // Build completion callback for Elo, replay, and match finishing
+    let on_complete = build_game_completion_callback(
+        state.db.clone(),
+        m.id,
+        bot_version_ids.clone(),
+        format.to_string(),
+        state.game_queue.clone(),
+    );
+
+    match state.game_server.start_game_with_callback(
+        world,
+        players,
+        None,
+        Some(m.id),
+        bot_version_ids,
+        false,
+        Some(on_complete),
+    ) {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({
                 "status": "running",
+                "match_id": m.id,
                 "message": "Game started. Connect to /ws/game for live updates."
             })),
         )
@@ -1615,7 +1654,11 @@ pub fn build_game_completion_callback(
 
             // Update per-participant stats
             for (i, p) in participants.iter().enumerate() {
-                let score = result.player_scores.get(i).map(|s| s.score).unwrap_or(0);
+                let ps = result.player_scores.get(i);
+                let score = ps.map(|s| s.score).unwrap_or(0);
+                let spawned = ps.map(|s| s.creatures_spawned).unwrap_or(0);
+                let killed = ps.map(|s| s.creatures_killed).unwrap_or(0);
+                let lost_c = ps.map(|s| s.creatures_lost).unwrap_or(0);
                 let won = winner_version_id == Some(p.bot_version_id);
                 let lost = winner_version_id.is_some() && !won;
                 let draw = winner_version_id.is_none();
@@ -1627,14 +1670,14 @@ pub fn build_game_completion_callback(
                         Some((i + 1) as i32),
                         Some(0),
                         Some(0),
-                        0,
-                        0,
-                        0,
+                        spawned,
+                        killed,
+                        lost_c,
                     )
                     .await;
 
                 let _ = db
-                    .update_version_stats(p.bot_version_id, won, lost, draw, score, 0, 0, 0)
+                    .update_version_stats(p.bot_version_id, won, lost, draw, score, spawned, killed, lost_c)
                     .await;
             }
 
@@ -1677,8 +1720,10 @@ pub fn build_game_completion_callback(
                 );
 
                 // Update elo_before/elo_after on participants
-                let score_0 = result.player_scores.get(0).map(|s| s.score).unwrap_or(0);
-                let score_1 = result.player_scores.get(1).map(|s| s.score).unwrap_or(0);
+                let ps0 = result.player_scores.get(0);
+                let ps1 = result.player_scores.get(1);
+                let score_0 = ps0.map(|s| s.score).unwrap_or(0);
+                let score_1 = ps1.map(|s| s.score).unwrap_or(0);
 
                 let _ = db
                     .update_match_participant(
@@ -1691,9 +1736,9 @@ pub fn build_game_completion_callback(
                         }),
                         Some(v0.elo_1v1),
                         Some(new_elo_0),
-                        0,
-                        0,
-                        0,
+                        ps0.map(|s| s.creatures_spawned).unwrap_or(0),
+                        ps0.map(|s| s.creatures_killed).unwrap_or(0),
+                        ps0.map(|s| s.creatures_lost).unwrap_or(0),
                     )
                     .await;
                 let _ = db
@@ -1707,9 +1752,9 @@ pub fn build_game_completion_callback(
                         }),
                         Some(v1.elo_1v1),
                         Some(new_elo_1),
-                        0,
-                        0,
-                        0,
+                        ps1.map(|s| s.creatures_spawned).unwrap_or(0),
+                        ps1.map(|s| s.creatures_killed).unwrap_or(0),
+                        ps1.map(|s| s.creatures_lost).unwrap_or(0),
                     )
                     .await;
 
