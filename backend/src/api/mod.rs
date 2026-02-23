@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use std::path::PathBuf;
 
-use crate::auth::{AuthUser, OptionalAuthUser};
+use crate::auth::AuthUser;
 use crate::db::Database;
 use crate::engine::server::{self, GameResult, GameServer, PlayerEntry};
 use crate::engine::world::World;
@@ -255,16 +255,12 @@ pub struct ListBotsParams {
 
 async fn list_bots(
     State(state): State<AppState>,
-    auth: OptionalAuthUser,
+    auth: AuthUser,
     Query(params): Query<ListBotsParams>,
 ) -> impl IntoResponse {
     let show_all = params.all.unwrap_or(false);
     let result = if !show_all {
-        if let Some(claims) = auth.0 {
-            state.db.list_bot_summaries_by_owner(claims.sub).await
-        } else {
-            state.db.list_bot_summaries().await
-        }
+        state.db.list_bot_summaries_by_owner(auth.0.sub).await
     } else {
         state.db.list_bot_summaries().await
     };
@@ -277,14 +273,14 @@ async fn list_bots(
 
 async fn create_bot(
     State(state): State<AppState>,
-    auth: OptionalAuthUser,
+    auth: AuthUser,
     Json(req): Json<CreateBotRequest>,
 ) -> impl IntoResponse {
     if req.name.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
     }
     let description = req.description.unwrap_or_default();
-    let owner_id = auth.0.map(|c| c.sub);
+    let owner_id = Some(auth.0.sub);
     match state.db.create_bot(&req.name, &description, owner_id).await {
         Ok(bot) => (StatusCode::CREATED, Json(json!(bot))).into_response(),
         Err(e) => internal_error(e).into_response(),
@@ -633,6 +629,7 @@ async fn list_tournaments(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn create_tournament(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Json(req): Json<CreateTournamentRequest>,
 ) -> impl IntoResponse {
     if req.name.is_empty() {
@@ -655,6 +652,7 @@ async fn get_tournament(State(state): State<AppState>, Path(id): Path<i64>) -> i
 
 async fn update_tournament(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Path(id): Path<i64>,
     Json(req): Json<UpdateTournamentRequest>,
 ) -> impl IntoResponse {
@@ -723,6 +721,7 @@ async fn list_tournament_entries(
 
 async fn add_tournament_entry(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Path(tournament_id): Path<i64>,
     Json(req): Json<AddTournamentEntryRequest>,
 ) -> impl IntoResponse {
@@ -746,6 +745,7 @@ async fn add_tournament_entry(
 
 async fn remove_tournament_entry(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Path((_tournament_id, entry_id)): Path<(i64, i64)>,
 ) -> impl IntoResponse {
     match state.db.remove_tournament_entry(entry_id).await {
@@ -780,6 +780,7 @@ async fn get_tournament_results(
 
 async fn run_tournament(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Path(tournament_id): Path<i64>,
 ) -> impl IntoResponse {
     // Check tournament exists
@@ -976,6 +977,7 @@ async fn leaderboard_2v2(
 
 async fn start_game(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Json(req): Json<StartGameRequest>,
 ) -> impl IntoResponse {
     if state.game_server.is_running() {
@@ -1045,7 +1047,7 @@ async fn game_status(State(state): State<AppState>) -> impl IntoResponse {
         .into_response()
 }
 
-async fn stop_game(State(state): State<AppState>) -> impl IntoResponse {
+async fn stop_game(State(state): State<AppState>, _auth: AuthUser) -> impl IntoResponse {
     if !state.game_server.is_running() {
         return json_error(StatusCode::BAD_REQUEST, "No game is running").into_response();
     }

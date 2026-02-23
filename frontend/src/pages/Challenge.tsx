@@ -1,11 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams, Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Bot, BotVersion, MapInfo, ChallengeResult } from '../api/client';
 
 export function Challenge() {
-  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const prefilledOpponent = searchParams.get('opponent');
 
@@ -114,10 +112,6 @@ export function Challenge() {
       setSubmitting(false);
     }
   }, [selectedVersionId, opponentVersionId, format, headless, selectedMap]);
-
-  if (!user) {
-    return <Navigate to="/login" />;
-  }
 
   if (loading) {
     return (

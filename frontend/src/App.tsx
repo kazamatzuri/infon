@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { Home } from './pages/Home';
 import { BotLibrary } from './pages/BotLibrary';
 import { BotEditor } from './pages/BotEditor';
 import { TournamentList } from './pages/TournamentList';
@@ -12,6 +13,8 @@ import { ApiKeys } from './pages/ApiKeys';
 import { Challenge } from './pages/Challenge';
 import { Teams } from './pages/Teams';
 import { MatchDetail } from './pages/MatchDetail';
+import { Documentation } from './pages/Documentation';
+import { ProtectedRoute } from './components/ProtectedRoute';
 import './App.css';
 
 function NavBar() {
@@ -20,11 +23,22 @@ function NavBar() {
   return (
     <nav className="app-nav">
       <h1 className="app-title">Infon Arena</h1>
-      <NavLink to="/" end className={navLinkClass}>Bot Library</NavLink>
-      <NavLink to="/editor" className={navLinkClass}>Editor</NavLink>
-      <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
-      <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
-      <NavLink to="/game" className={navLinkClass}>Game</NavLink>
+      {user ? (
+        <>
+          <NavLink to="/bots" className={navLinkClass}>Bot Library</NavLink>
+          <NavLink to="/editor" className={navLinkClass}>Editor</NavLink>
+          <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
+          <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
+          <NavLink to="/game" className={navLinkClass}>Game</NavLink>
+          <NavLink to="/docs" className={navLinkClass}>Docs</NavLink>
+        </>
+      ) : (
+        <>
+          <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
+          <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
+          <NavLink to="/docs" className={navLinkClass}>Docs</NavLink>
+        </>
+      )}
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         {user ? (
           <>
@@ -55,17 +69,19 @@ function App() {
           <NavBar />
           <main style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
             <Routes>
-              <Route path="/" element={<BotLibrary />} />
-              <Route path="/editor" element={<BotEditor />} />
-              <Route path="/editor/:botId" element={<BotEditor />} />
+              <Route path="/" element={<Home />} />
+              <Route path="/bots" element={<ProtectedRoute><BotLibrary /></ProtectedRoute>} />
+              <Route path="/editor" element={<ProtectedRoute><BotEditor /></ProtectedRoute>} />
+              <Route path="/editor/:botId" element={<ProtectedRoute><BotEditor /></ProtectedRoute>} />
               <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/tournaments" element={<TournamentList />} />
               <Route path="/tournaments/:id" element={<TournamentDetail />} />
-              <Route path="/game" element={<GameViewer />} />
-              <Route path="/teams" element={<Teams />} />
+              <Route path="/game" element={<ProtectedRoute><GameViewer /></ProtectedRoute>} />
+              <Route path="/teams" element={<ProtectedRoute><Teams /></ProtectedRoute>} />
               <Route path="/matches/:id" element={<MatchDetail />} />
-              <Route path="/challenge" element={<Challenge />} />
-              <Route path="/api-keys" element={<ApiKeys />} />
+              <Route path="/challenge" element={<ProtectedRoute><Challenge /></ProtectedRoute>} />
+              <Route path="/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
+              <Route path="/docs" element={<Documentation />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
             </Routes>

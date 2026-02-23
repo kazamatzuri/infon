@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import type { Tournament, TournamentEntry, TournamentResult, TournamentStanding, Bot, BotVersion } from '../api/client';
 
@@ -23,6 +24,7 @@ function formatLabel(format: string): string {
 export function TournamentDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [tournament, setTournament] = useState<Tournament | null>(null);
   const [entries, setEntries] = useState<TournamentEntry[]>([]);
@@ -162,7 +164,7 @@ export function TournamentDetail() {
             </span>
           </div>
         </div>
-        {(tournament.status === 'pending' || tournament.status === 'created') && entries.length >= 2 && (
+        {user && (tournament.status === 'pending' || tournament.status === 'created') && entries.length >= 2 && (
           <button onClick={handleRun} style={btnRun}>
             Run Match
           </button>
@@ -224,7 +226,7 @@ export function TournamentDetail() {
                 <td style={tdStyle}>v{entry.version || entry.bot_version_id}</td>
                 <td style={{ ...tdStyle, color: '#888' }}>{entry.slot_name || '-'}</td>
                 <td style={tdStyle}>
-                  {(tournament.status === 'pending' || tournament.status === 'created') && (
+                  {user && (tournament.status === 'pending' || tournament.status === 'created') && (
                     <button onClick={() => handleRemoveEntry(entry.id)} style={btnDanger}>
                       Remove
                     </button>
@@ -237,7 +239,7 @@ export function TournamentDetail() {
       )}
 
       {/* Add entry form */}
-      {(tournament.status === 'pending' || tournament.status === 'created') && (
+      {user && (tournament.status === 'pending' || tournament.status === 'created') && (
         <div style={{ padding: '16px', background: '#16213e', borderRadius: '8px', marginBottom: '24px' }}>
           <h4 style={{ color: '#aaa', margin: '0 0 12px 0', fontSize: '13px', textTransform: 'uppercase' }}>
             Add Entry

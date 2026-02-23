@@ -9,7 +9,7 @@ async function registerUser(page: import('@playwright/test').Page) {
   await page.locator('label:has-text("Email") + input').fill(`${username}@test.local`);
   await page.locator('label:has-text("Password") + input').fill('TestPass1234');
   await page.getByRole('button', { name: /Register/ }).click();
-  await expect(page).toHaveURL('/', { timeout: 10000 });
+  await expect(page).toHaveURL('/bots', { timeout: 10000 });
   return username;
 }
 
@@ -24,7 +24,7 @@ test.describe('Bot Creation & Library Workflow', () => {
 
     // Navigate back to library
     await page.getByRole('link', { name: 'Bot Library' }).click();
-    await expect(page).toHaveURL('/');
+    await expect(page).toHaveURL('/bots');
     await page.waitForTimeout(1000);
 
     // Should see at least one bot
@@ -42,7 +42,7 @@ test.describe('Bot Creation & Library Workflow', () => {
 
     // Go back to library
     await page.getByRole('link', { name: 'Bot Library' }).click();
-    await expect(page).toHaveURL('/');
+    await expect(page).toHaveURL('/bots');
     await page.waitForTimeout(1000);
 
     // Should have at least one bot row
@@ -73,7 +73,7 @@ test.describe('Bot Creation & Library Workflow', () => {
     await expect(page).toHaveURL(/\/editor\/\d+/, { timeout: 5000 });
 
     await page.getByRole('link', { name: 'Bot Library' }).click();
-    await expect(page).toHaveURL('/');
+    await expect(page).toHaveURL('/bots');
     await page.waitForTimeout(1000);
 
     const rows = page.locator('table tbody tr');

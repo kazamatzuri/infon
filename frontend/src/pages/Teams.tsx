@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Navigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Team, TeamVersion, Bot, BotVersion } from '../api/client';
 
@@ -147,10 +146,6 @@ export function Teams() {
       setCreatingVersion(false);
     }
   };
-
-  if (!user) {
-    return <Navigate to="/login" />;
-  }
 
   return (
     <div style={{ maxWidth: 800, margin: '40px auto', padding: 24 }}>

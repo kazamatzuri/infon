@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import type { Tournament } from '../api/client';
 
@@ -9,6 +10,7 @@ export function TournamentList() {
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const loadTournaments = async () => {
     try {
@@ -50,18 +52,20 @@ export function TournamentList() {
       )}
 
       {/* Create form */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-        <input
-          value={newName}
-          onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleCreate()}
-          placeholder="Tournament name"
-          style={inputStyle}
-        />
-        <button onClick={handleCreate} disabled={!newName.trim()} style={btnPrimary}>
-          + New Tournament
-        </button>
-      </div>
+      {user && (
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+          <input
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+            placeholder="Tournament name"
+            style={inputStyle}
+          />
+          <button onClick={handleCreate} disabled={!newName.trim()} style={btnPrimary}>
+            + New Tournament
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <p style={{ color: '#888' }}>Loading...</p>

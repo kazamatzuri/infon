@@ -31,7 +31,7 @@ test.describe('Authentication Flow', () => {
     await page.getByRole('button', { name: /Register/ }).click();
 
     // Should redirect to home
-    await expect(page).toHaveURL('/', { timeout: 10000 });
+    await expect(page).toHaveURL('/bots', { timeout: 10000 });
     const nav = page.locator('nav.app-nav');
     await expect(nav.getByText(username)).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Challenge' })).toBeVisible();
@@ -57,7 +57,7 @@ test.describe('Authentication Flow', () => {
     await page.goto('/register');
     await fillRegister(page, username, email, password);
     await page.getByRole('button', { name: /Register/ }).click();
-    await expect(page).toHaveURL('/', { timeout: 10000 });
+    await expect(page).toHaveURL('/bots', { timeout: 10000 });
 
     // Logout
     await page.getByRole('button', { name: 'Logout' }).click();
@@ -67,7 +67,7 @@ test.describe('Authentication Flow', () => {
     await page.goto('/login');
     await fillLogin(page, username, password);
     await page.getByRole('button', { name: /Login/ }).click();
-    await expect(page).toHaveURL('/', { timeout: 10000 });
+    await expect(page).toHaveURL('/bots', { timeout: 10000 });
     await expect(page.locator('nav.app-nav').getByText(username)).toBeVisible();
   });
 
@@ -91,7 +91,7 @@ test.describe('Authentication Flow', () => {
     await page.goto('/register');
     await fillRegister(page, username, email, password);
     await page.getByRole('button', { name: /Register/ }).click();
-    await expect(page).toHaveURL('/', { timeout: 10000 });
+    await expect(page).toHaveURL('/bots', { timeout: 10000 });
 
     // Logout and try duplicate
     await page.getByRole('button', { name: 'Logout' }).click();

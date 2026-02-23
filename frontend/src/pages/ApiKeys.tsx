@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Navigate } from 'react-router-dom';
 import { api } from '../api/client';
 
 interface ApiKey {
@@ -55,10 +54,6 @@ export function ApiKeys() {
       fetchKeys();
     }
   }, [user, fetchKeys]);
-
-  if (!user) {
-    return <Navigate to="/login" />;
-  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();

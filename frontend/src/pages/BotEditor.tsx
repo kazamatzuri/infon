@@ -111,7 +111,7 @@ export function BotEditor() {
     return (
       <div style={{ padding: '24px', textAlign: 'center', color: '#888' }}>
         <p>Select a bot from the library or create a new one.</p>
-        <button onClick={() => navigate('/')} style={btnPrimary}>
+        <button onClick={() => navigate('/bots')} style={btnPrimary}>
           Go to Bot Library
         </button>
       </div>
