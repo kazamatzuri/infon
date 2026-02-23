@@ -83,6 +83,14 @@ async fn main() {
         tracing::info!("==========================================================");
     }
 
+    // DATABASE_URL supports both sqlite:// and postgres:// connection strings.
+    // Examples:
+    //   sqlite:infon.db?mode=rwc          (SQLite, default)
+    //   sqlite::memory:                    (SQLite in-memory, for tests)
+    //   postgres://user:pass@host/dbname   (PostgreSQL)
+    // Install Any driver support for both SQLite and PostgreSQL.
+    sqlx::any::install_default_drivers();
+
     let db = db::Database::new(&cfg.database_url)
         .await
         .expect("Failed to initialize database");

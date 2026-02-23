@@ -551,7 +551,7 @@ async fn get_bot_stats(
                         } else {
                             0.0
                         },
-                        "is_archived": v.is_archived,
+                        "is_archived": v.is_archived != 0, // bool for JSON compat
                     })
                 })
                 .collect();
