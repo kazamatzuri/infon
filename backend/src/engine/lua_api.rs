@@ -6,6 +6,7 @@ use mlua::{Lua, MultiValue, Result as LuaResult, Value};
 
 use super::config::*;
 use super::creature::Creature;
+use super::spatial::SpatialGrid;
 use super::world::World;
 
 /// Shared game state accessible during Lua execution.
@@ -19,6 +20,8 @@ pub struct LuaGameState {
     pub player_names: Rc<RefCell<HashMap<u32, String>>>,
     pub king_player_id: Option<u32>,
     pub print_output: Rc<RefCell<Vec<String>>>,
+    /// Optional spatial index for fast nearest-enemy queries.
+    pub spatial_grid: Option<Rc<RefCell<SpatialGrid>>>,
 }
 
 /// Register all Lua constants into the VM.
@@ -341,21 +344,29 @@ pub fn register_functions(lua: &Lua, _player_id: u32) -> LuaResult<()> {
             let my_x = creature.x;
             let my_y = creature.y;
 
-            let mut nearest: Option<(u32, i32, i32, u32, i32)> = None;
-            let mut min_dist = i32::MAX;
+            // Use spatial index if available (O(n*k) instead of O(n^2))
+            let nearest = if let Some(ref grid_rc) = gs.spatial_grid {
+                let grid = grid_rc.borrow();
+                grid.find_nearest_enemy(my_x, my_y, my_player)
+            } else {
+                // Fallback: linear scan (for backward compatibility)
+                let mut best: Option<(u32, i32, i32, u32, i32)> = None;
+                let mut min_dist = i32::MAX;
 
-            for (_, other) in creatures.iter() {
-                if other.player_id == my_player {
-                    continue;
+                for (_, other) in creatures.iter() {
+                    if other.player_id == my_player {
+                        continue;
+                    }
+                    let dx = (my_x - other.x) as i64;
+                    let dy = (my_y - other.y) as i64;
+                    let dist = ((dx * dx + dy * dy) as f64).sqrt() as i32;
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best = Some((other.id, other.x, other.y, other.player_id, dist));
+                    }
                 }
-                let dx = (my_x - other.x) as i64;
-                let dy = (my_y - other.y) as i64;
-                let dist = ((dx * dx + dy * dy) as f64).sqrt() as i32;
-                if dist < min_dist {
-                    min_dist = dist;
-                    nearest = Some((other.id, other.x, other.y, other.player_id, dist));
-                }
-            }
+                best
+            };
 
             match nearest {
                 Some((id, x, y, player, dist)) => Ok(MultiValue::from_vec(vec![
@@ -602,6 +613,7 @@ mod tests {
             player_names: Rc::new(RefCell::new(player_names)),
             king_player_id: None,
             print_output: Rc::new(RefCell::new(Vec::new())),
+            spatial_grid: None,
         }));
 
         set_game_state(&lua, gs.clone());

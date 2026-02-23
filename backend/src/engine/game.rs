@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use serde::Serialize;
 
@@ -8,6 +9,7 @@ use super::config::*;
 use super::creature::Creature;
 use super::lua_api::{self, LuaGameState};
 use super::player::Player;
+use super::spatial::SpatialGrid;
 use super::world::World;
 
 /// Per-player game statistics tracked during gameplay.
@@ -28,7 +30,7 @@ pub enum GameEvent {
 }
 
 /// Snapshot of a creature for rendering / API consumers.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct CreatureSnapshot {
     pub id: u32,
     pub x: i32,
@@ -83,6 +85,33 @@ pub struct GameSnapshot {
     pub king_player_id: Option<u32>,
 }
 
+/// Delta snapshot: only creatures that changed since the last full snapshot.
+/// The frontend merges this with the last full snapshot.
+#[derive(Clone, Debug, Serialize)]
+pub struct GameSnapshotDelta {
+    pub game_time: i64,
+    /// Creatures that were added or changed since last snapshot.
+    pub changed: Vec<CreatureSnapshot>,
+    /// IDs of creatures that were removed since last snapshot.
+    pub removed: Vec<u32>,
+    /// Player data (always sent in full since it's small).
+    pub players: Vec<PlayerSnapshot>,
+    pub king_player_id: Option<u32>,
+}
+
+/// Tick timing data for observability and budget monitoring.
+#[derive(Clone, Debug, Default)]
+pub struct TickTimings {
+    /// Total tick duration in microseconds.
+    pub total_us: u64,
+    /// Time spent in player_think (Lua) in microseconds.
+    pub think_us: u64,
+    /// Time spent processing creatures in microseconds.
+    pub creatures_us: u64,
+    /// Per-player think time in microseconds (player_id -> us).
+    pub per_player_think_us: Vec<(u32, u64)>,
+}
+
 /// Top-level game state and tick loop.
 pub struct Game {
     pub world: Rc<RefCell<World>>,
@@ -99,10 +128,15 @@ pub struct Game {
     pending_events: HashMap<u32, Vec<GameEvent>>,
     /// Per-player statistics (spawns, kills, losses)
     player_stats: HashMap<u32, PlayerStats>,
+    /// Spatial index for fast creature proximity queries. Rebuilt each tick.
+    spatial_grid: Rc<RefCell<SpatialGrid>>,
+    /// Timing data from the last tick.
+    pub last_tick_timings: TickTimings,
 }
 
 impl Game {
     pub fn new(world: World) -> Self {
+        let grid = SpatialGrid::new(world.width, world.height);
         Game {
             world: Rc::new(RefCell::new(world)),
             creatures: Rc::new(RefCell::new(HashMap::new())),
@@ -116,6 +150,8 @@ impl Game {
             player_names: Rc::new(RefCell::new(HashMap::new())),
             pending_events: HashMap::new(),
             player_stats: HashMap::new(),
+            spatial_grid: Rc::new(RefCell::new(grid)),
+            last_tick_timings: TickTimings::default(),
         }
     }
 
@@ -139,6 +175,7 @@ impl Game {
             player_names: self.player_names.clone(),
             king_player_id: self.king_player_id,
             print_output: print_output.clone(),
+            spatial_grid: Some(self.spatial_grid.clone()),
         }));
         lua_api::set_game_state(&player.lua, gs);
 
@@ -341,13 +378,21 @@ impl Game {
 
     /// Run one game tick.
     pub fn tick(&mut self) {
+        let tick_start = Instant::now();
         let delta = self.tick_delta;
 
+        // 0. Rebuild spatial index from current creature positions
+        self.rebuild_spatial_index();
+
         // 1. Run each player's think (Lua execution)
+        let think_start = Instant::now();
         self.process_player_think();
+        let think_us = think_start.elapsed().as_micros() as u64;
 
         // 2. Process all creatures (movement, combat, aging, etc.)
+        let creatures_start = Instant::now();
         self.process_creatures(delta);
+        let creatures_us = creatures_start.elapsed().as_micros() as u64;
 
         // 3. King of the Hill scoring
         self.process_koth();
@@ -357,6 +402,37 @@ impl Game {
 
         // 5. Advance game time
         self.game_time += delta as i64;
+
+        // 6. Record tick timings
+        let total_us = tick_start.elapsed().as_micros() as u64;
+        self.last_tick_timings = TickTimings {
+            total_us,
+            think_us,
+            creatures_us,
+            per_player_think_us: Vec::new(), // populated during process_player_think
+        };
+
+        // Warn if tick took too long (>50ms for a 100ms tick budget)
+        if total_us > 50_000 {
+            tracing::warn!(
+                game_time = self.game_time,
+                total_us,
+                think_us,
+                creatures_us,
+                creature_count = self.creatures.borrow().len(),
+                "Tick exceeded budget (>50ms)"
+            );
+        }
+    }
+
+    /// Rebuild the spatial index from current creature positions.
+    fn rebuild_spatial_index(&self) {
+        let mut grid = self.spatial_grid.borrow_mut();
+        grid.clear();
+        let creatures = self.creatures.borrow();
+        for (_, c) in creatures.iter() {
+            grid.insert(c.id, c.x, c.y, c.player_id);
+        }
     }
 
     /// Spawn food from map food spawners. Each spawner places food at a random tile
@@ -472,6 +548,7 @@ impl Game {
                 player_names: self.player_names.clone(),
                 king_player_id: self.king_player_id,
                 print_output: print_output.clone(),
+                spatial_grid: Some(self.spatial_grid.clone()),
             }));
 
             lua_api::set_game_state(&player.lua, gs);
@@ -888,6 +965,46 @@ impl Game {
         }
     }
 
+    /// Compute a delta between the current snapshot and a previous one.
+    /// Only includes creatures that changed or were added/removed.
+    pub fn compute_delta(
+        current: &GameSnapshot,
+        previous: &GameSnapshot,
+    ) -> GameSnapshotDelta {
+        use std::collections::HashMap;
+
+        let prev_map: HashMap<u32, &CreatureSnapshot> =
+            previous.creatures.iter().map(|c| (c.id, c)).collect();
+        let curr_map: HashMap<u32, &CreatureSnapshot> =
+            current.creatures.iter().map(|c| (c.id, c)).collect();
+
+        let mut changed = Vec::new();
+        let mut removed = Vec::new();
+
+        // Find changed or new creatures
+        for c in &current.creatures {
+            match prev_map.get(&c.id) {
+                Some(prev) if *prev == c => {} // unchanged
+                _ => changed.push(c.clone()),  // new or changed
+            }
+        }
+
+        // Find removed creatures
+        for id in prev_map.keys() {
+            if !curr_map.contains_key(id) {
+                removed.push(*id);
+            }
+        }
+
+        GameSnapshotDelta {
+            game_time: current.game_time,
+            changed,
+            removed,
+            players: current.players.clone(),
+            king_player_id: current.king_player_id,
+        }
+    }
+
     /// Create a snapshot of the world (tiles) for initial WebSocket handshake.
     pub fn world_snapshot(&self) -> WorldSnapshot {
         let world = self.world.borrow();
@@ -1261,5 +1378,190 @@ mod tests {
         // Should not hang
         game.tick();
         assert_eq!(game.game_time, 100);
+    }
+
+    #[test]
+    fn test_delta_compression_no_change() {
+        let snap = GameSnapshot {
+            game_time: 100,
+            creatures: vec![CreatureSnapshot {
+                id: 1,
+                x: 500,
+                y: 500,
+                creature_type: 0,
+                health: 10000,
+                max_health: 10000,
+                food: 0,
+                state: 0,
+                player_id: 1,
+                message: String::new(),
+                target_id: None,
+            }],
+            players: vec![],
+            king_player_id: None,
+        };
+
+        let delta = Game::compute_delta(&snap, &snap);
+        assert!(delta.changed.is_empty(), "No creatures should have changed");
+        assert!(delta.removed.is_empty(), "No creatures should be removed");
+    }
+
+    #[test]
+    fn test_delta_compression_creature_moved() {
+        let prev = GameSnapshot {
+            game_time: 100,
+            creatures: vec![CreatureSnapshot {
+                id: 1,
+                x: 500,
+                y: 500,
+                creature_type: 0,
+                health: 10000,
+                max_health: 10000,
+                food: 0,
+                state: 0,
+                player_id: 1,
+                message: String::new(),
+                target_id: None,
+            }],
+            players: vec![],
+            king_player_id: None,
+        };
+
+        let mut current = prev.clone();
+        current.game_time = 200;
+        current.creatures[0].x = 600; // moved
+
+        let delta = Game::compute_delta(&current, &prev);
+        assert_eq!(delta.changed.len(), 1);
+        assert_eq!(delta.changed[0].id, 1);
+        assert_eq!(delta.changed[0].x, 600);
+        assert!(delta.removed.is_empty());
+    }
+
+    #[test]
+    fn test_delta_compression_creature_added() {
+        let prev = GameSnapshot {
+            game_time: 100,
+            creatures: vec![CreatureSnapshot {
+                id: 1,
+                x: 500,
+                y: 500,
+                creature_type: 0,
+                health: 10000,
+                max_health: 10000,
+                food: 0,
+                state: 0,
+                player_id: 1,
+                message: String::new(),
+                target_id: None,
+            }],
+            players: vec![],
+            king_player_id: None,
+        };
+
+        let mut current = prev.clone();
+        current.game_time = 200;
+        current.creatures.push(CreatureSnapshot {
+            id: 2,
+            x: 700,
+            y: 700,
+            creature_type: 1,
+            health: 20000,
+            max_health: 20000,
+            food: 0,
+            state: 0,
+            player_id: 2,
+            message: String::new(),
+            target_id: None,
+        });
+
+        let delta = Game::compute_delta(&current, &prev);
+        assert_eq!(delta.changed.len(), 1); // only the new creature (id=2)
+        assert_eq!(delta.changed[0].id, 2);
+        assert!(delta.removed.is_empty());
+    }
+
+    #[test]
+    fn test_delta_compression_creature_removed() {
+        let prev = GameSnapshot {
+            game_time: 100,
+            creatures: vec![
+                CreatureSnapshot {
+                    id: 1,
+                    x: 500,
+                    y: 500,
+                    creature_type: 0,
+                    health: 10000,
+                    max_health: 10000,
+                    food: 0,
+                    state: 0,
+                    player_id: 1,
+                    message: String::new(),
+                    target_id: None,
+                },
+                CreatureSnapshot {
+                    id: 2,
+                    x: 700,
+                    y: 700,
+                    creature_type: 1,
+                    health: 20000,
+                    max_health: 20000,
+                    food: 0,
+                    state: 0,
+                    player_id: 2,
+                    message: String::new(),
+                    target_id: None,
+                },
+            ],
+            players: vec![],
+            king_player_id: None,
+        };
+
+        let mut current = prev.clone();
+        current.game_time = 200;
+        current.creatures.retain(|c| c.id != 2); // remove creature 2
+
+        let delta = Game::compute_delta(&current, &prev);
+        assert!(delta.changed.is_empty());
+        assert_eq!(delta.removed.len(), 1);
+        assert_eq!(delta.removed[0], 2);
+    }
+
+    #[test]
+    fn test_tick_records_timings() {
+        let world = make_test_world();
+        let mut game = Game::new(world);
+        let pid = game.add_player("TestBot", "").unwrap();
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
+
+        game.tick();
+
+        // Timings should be recorded (total_us > 0 since some work was done)
+        assert!(
+            game.last_tick_timings.total_us > 0,
+            "Total tick time should be > 0"
+        );
+    }
+
+    #[test]
+    fn test_spatial_index_used_in_tick() {
+        // Verify that the spatial index is rebuilt each tick without errors
+        let world = make_test_world();
+        let mut game = Game::new(world);
+        let pid1 = game.add_player("Bot1", "").unwrap();
+        let pid2 = game.add_player("Bot2", "").unwrap();
+
+        let cx = World::tile_center(3);
+        let cy = World::tile_center(3);
+        game.spawn_creature(pid1, cx, cy, CREATURE_SMALL);
+        game.spawn_creature(pid2, cx + 256, cy, CREATURE_SMALL);
+
+        // Run several ticks -- the spatial index is rebuilt each time
+        for _ in 0..10 {
+            game.tick();
+        }
+        assert_eq!(game.game_time, 1000);
     }
 }

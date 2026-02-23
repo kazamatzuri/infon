@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use crate::replay::ReplayRecorder;
 
 use super::config::*;
-use super::game::{Game, GameSnapshot, PlayerSnapshot, WorldSnapshot};
+use super::game::{Game, GameSnapshot, GameSnapshotDelta, PlayerSnapshot, WorldSnapshot};
 use super::world::{RandomMapParams, World};
 
 /// Result of a completed game, passed to the on_complete callback.
@@ -99,9 +99,12 @@ pub enum GameMessage {
     /// Initial world state (tiles, dimensions, koth position).
     #[serde(rename = "world")]
     WorldInit(WorldSnapshot),
-    /// Per-tick game state snapshot.
+    /// Per-tick game state snapshot (full).
     #[serde(rename = "snapshot")]
     Snapshot(GameSnapshot),
+    /// Per-tick delta snapshot (only changed creatures).
+    #[serde(rename = "snapshot_delta")]
+    SnapshotDelta(GameSnapshotDelta),
     /// Game has ended.
     #[serde(rename = "game_end")]
     GameEnd {
@@ -266,19 +269,47 @@ impl GameServer {
                     recorder.record_message(&json);
                 }
 
-                // Game loop
+                // Game loop with delta compression
                 let mut tick_count: u64 = 0;
                 let mut winner: Option<u32> = None;
+                let mut prev_snapshot: Option<GameSnapshot> = None;
+                const FULL_SNAPSHOT_INTERVAL: u64 = 10;
+
                 while running.load(Ordering::Relaxed) && tick_count < max_ticks {
                     game.tick();
                     tick_count += 1;
 
                     let snapshot = game.snapshot();
-                    let msg = GameMessage::Snapshot(snapshot);
-                    if let Ok(json) = serde_json::to_string(&msg) {
-                        let _ = tx.send(json.clone());
-                        recorder.record_message(&json);
+
+                    // Send full snapshot every N ticks, delta in between
+                    let send_full = tick_count % FULL_SNAPSHOT_INTERVAL == 1
+                        || prev_snapshot.is_none();
+
+                    if send_full {
+                        let msg = GameMessage::Snapshot(snapshot.clone());
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            let _ = tx.send(json.clone());
+                            recorder.record_message(&json);
+                        }
+                    } else if let Some(ref prev) = prev_snapshot {
+                        let delta = Game::compute_delta(&snapshot, prev);
+                        // Only send delta if it's smaller than full (fallback to full)
+                        let delta_msg = GameMessage::SnapshotDelta(delta);
+                        if let Ok(delta_json) = serde_json::to_string(&delta_msg) {
+                            let full_msg = GameMessage::Snapshot(snapshot.clone());
+                            if let Ok(full_json) = serde_json::to_string(&full_msg) {
+                                if delta_json.len() < full_json.len() {
+                                    let _ = tx.send(delta_json.clone());
+                                    recorder.record_message(&delta_json);
+                                } else {
+                                    let _ = tx.send(full_json.clone());
+                                    recorder.record_message(&full_json);
+                                }
+                            }
+                        }
                     }
+
+                    prev_snapshot = Some(snapshot);
 
                     // Check win condition: only one player has creatures left
                     if let Some(w) = game.check_winner() {
