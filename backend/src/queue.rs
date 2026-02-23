@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::api::{build_game_completion_callback, resolve_map};
 use crate::db::Database;
 use crate::engine::server::{GameServer, PlayerEntry};
+use crate::metrics;
 
 /// A pending match in the queue.
 #[derive(Debug, Clone)]
@@ -50,12 +51,15 @@ impl GameQueue {
     pub fn enqueue(&self, entry: QueueEntry) {
         let mut queue = self.inner.lock().unwrap();
         queue.push_back(entry);
+        metrics::GAME_QUEUE_DEPTH.set(queue.len() as i64);
     }
 
     /// Remove and return the next match from the front of the queue.
     pub fn dequeue(&self) -> Option<QueueEntry> {
         let mut queue = self.inner.lock().unwrap();
-        queue.pop_front()
+        let result = queue.pop_front();
+        metrics::GAME_QUEUE_DEPTH.set(queue.len() as i64);
+        result
     }
 
     /// Peek at the next entry without removing it.

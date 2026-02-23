@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::metrics;
 use crate::replay::ReplayRecorder;
 
 use super::config::*;
@@ -213,6 +214,22 @@ impl GameServer {
 
         running.store(true, Ordering::Relaxed);
 
+        // Determine format label for metrics
+        let format_label = if players.len() == 2 {
+            "1v1"
+        } else if players.len() > 2 {
+            "ffa"
+        } else {
+            "other"
+        }
+        .to_string();
+
+        metrics::ACTIVE_GAMES.set(1);
+        metrics::GAMES_STARTED_TOTAL
+            .with_label_values(&[&format_label])
+            .inc();
+        let game_start_time = std::time::Instant::now();
+
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut game = Game::new(world);
@@ -270,7 +287,10 @@ impl GameServer {
                 let mut tick_count: u64 = 0;
                 let mut winner: Option<u32> = None;
                 while running.load(Ordering::Relaxed) && tick_count < max_ticks {
+                    let tick_start = std::time::Instant::now();
                     game.tick();
+                    let tick_elapsed_ms = tick_start.elapsed().as_secs_f64() * 1000.0;
+                    metrics::GAME_TICK_DURATION_MS.observe(tick_elapsed_ms);
                     tick_count += 1;
 
                     let snapshot = game.snapshot();
@@ -362,6 +382,15 @@ impl GameServer {
 
                     callback(game_result);
                 }
+
+                // Record game completion metrics
+                let game_elapsed_secs = game_start_time.elapsed().as_secs_f64();
+                metrics::GAMES_COMPLETED_TOTAL
+                    .with_label_values(&[&format_label])
+                    .inc();
+                metrics::GAME_DURATION_SECONDS
+                    .with_label_values(&[&format_label])
+                    .observe(game_elapsed_secs);
             }));
 
             if let Err(panic_info) = result {
@@ -373,8 +402,12 @@ impl GameServer {
                     "unknown panic".to_string()
                 };
                 tracing::error!("Game thread panicked: {}", msg);
+                metrics::GAMES_ERRORED_TOTAL
+                    .with_label_values(&[&format_label])
+                    .inc();
             }
 
+            metrics::ACTIVE_GAMES.set(0);
             *world_json.lock().unwrap() = None;
             running.store(false, Ordering::Relaxed);
         });
