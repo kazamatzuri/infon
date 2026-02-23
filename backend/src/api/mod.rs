@@ -238,10 +238,15 @@ pub fn router(
         )
         // Lua validation
         .route("/api/validate-lua", post(validate_lua))
+        // Active games
+        .route("/api/games/active", get(list_active_games))
         // Game control
         .route("/api/game/start", post(start_game))
         .route("/api/game/status", get(game_status))
         .route("/api/game/stop", post(stop_game))
+        // Notifications
+        .route("/api/notifications", get(list_notifications))
+        .route("/api/notifications/{id}/read", post(mark_notification_read))
         // API keys
         .route("/api/api-keys", get(list_api_keys).post(create_api_key))
         .route("/api/api-keys/{id}", delete(delete_api_key))
@@ -1009,6 +1014,56 @@ async fn validate_lua(
     }
 }
 
+// ── Active games handler ─────────────────────────────────────────────
+
+async fn list_active_games(State(state): State<AppState>) -> impl IntoResponse {
+    let mut active_games = Vec::new();
+    if let Some(info) = state.game_server.active_game_info() {
+        active_games.push(json!(info));
+    }
+    (StatusCode::OK, Json(json!(active_games))).into_response()
+}
+
+// ── Notification handlers ────────────────────────────────────────────
+
+async fn list_notifications(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> impl IntoResponse {
+    match state.db.list_recent_notifications(auth.0.sub, 20).await {
+        Ok(notifications) => {
+            let unread_count = state
+                .db
+                .unread_notification_count(auth.0.sub)
+                .await
+                .unwrap_or(0);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "notifications": notifications,
+                    "unread_count": unread_count,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn mark_notification_read(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.mark_notification_read(id, auth.0.sub).await {
+        Ok(true) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Ok(false) => {
+            json_error(StatusCode::NOT_FOUND, "Notification not found").into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
 // ── Game control handlers ────────────────────────────────────────────
 
 async fn start_game(
@@ -1097,15 +1152,18 @@ async fn start_game(
         false,
         Some(on_complete),
     ) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "running",
-                "match_id": m.id,
-                "message": "Game started. Connect to /ws/game for live updates."
-            })),
-        )
-            .into_response(),
+        Ok(()) => {
+            state.game_server.set_game_map(&map_name);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "running",
+                    "match_id": m.id,
+                    "message": "Game started. Connect to /ws/game for live updates."
+                })),
+            )
+                .into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -1341,15 +1399,18 @@ async fn create_challenge(
         false,
         Some(on_complete),
     ) {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "match_id": m.id,
-                "status": "running",
-                "message": "Game started. Connect to /ws/game for live updates."
-            })),
-        )
-            .into_response(),
+        Ok(()) => {
+            state.game_server.set_game_map(&map_name);
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "match_id": m.id,
+                    "status": "running",
+                    "message": "Game started. Connect to /ws/game for live updates."
+                })),
+            )
+                .into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -1651,6 +1712,40 @@ pub fn build_game_completion_callback(
             // 3. Finish match
             if let Err(e) = db.finish_match(match_id, winner_version_id).await {
                 tracing::error!("Failed to finish match {match_id}: {e}");
+            }
+
+            // 3b. Create notifications for match participants
+            if let Ok(owner_ids) = db.get_match_participant_owner_ids(match_id).await {
+                let winner_name = if let Some(wid) = winner_version_id {
+                    if let Ok(Some(v)) = db.get_bot_version_by_id(wid).await {
+                        if let Ok(Some(b)) = db.get_bot(v.bot_id).await {
+                            Some(format!("{} v{}", b.name, v.version))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let title = "Match completed".to_string();
+                let message = match winner_name {
+                    Some(name) => format!("Match #{match_id} finished. Winner: {name}"),
+                    None => format!("Match #{match_id} finished (draw)"),
+                };
+                let data = serde_json::json!({ "match_id": match_id }).to_string();
+                for owner_id in owner_ids {
+                    let _ = db
+                        .create_notification(
+                            owner_id,
+                            "match_complete",
+                            &title,
+                            &message,
+                            Some(&data),
+                        )
+                        .await;
+                }
             }
 
             // 4. Get participants and update stats + Elo

@@ -172,6 +172,7 @@ pub fn spawn_queue_worker(
                 game_queue.clone(),
             );
 
+            let map_name = entry.map.clone().unwrap_or_else(|| "random".to_string());
             let max_ticks = if entry.headless { Some(6000) } else { None };
             if let Err(e) = game_server.start_game_with_callback(
                 world,
@@ -183,6 +184,8 @@ pub fn spawn_queue_worker(
                 Some(on_complete),
             ) {
                 tracing::error!("Queue worker: failed to start game: {e}");
+            } else {
+                game_server.set_game_map(&map_name);
             }
         }
     });

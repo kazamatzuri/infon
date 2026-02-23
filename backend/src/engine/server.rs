@@ -2,7 +2,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -138,6 +138,18 @@ pub struct PlayerEntry {
     pub code: String,
 }
 
+/// Metadata about a currently running game.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveGameInfo {
+    pub match_id: Option<i64>,
+    pub player_names: Vec<String>,
+    pub format: String,
+    pub map: String,
+    pub start_time: String,
+    pub spectator_count: usize,
+    pub game_time_seconds: f64,
+}
+
 /// Manages a single game instance, running the game loop on a dedicated thread
 /// and broadcasting snapshots to WebSocket subscribers via a broadcast channel.
 pub struct GameServer {
@@ -145,6 +157,20 @@ pub struct GameServer {
     running: Arc<AtomicBool>,
     /// Cached world JSON so late-joining WS clients get the world state.
     world_json: Arc<Mutex<Option<String>>>,
+    /// Metadata about the current game for spectator listing.
+    game_meta: Arc<Mutex<Option<GameMeta>>>,
+    /// Tick counter updated by game loop thread.
+    current_tick: Arc<AtomicI64>,
+}
+
+/// Internal metadata stored when a game starts.
+#[derive(Debug, Clone)]
+struct GameMeta {
+    match_id: Option<i64>,
+    player_names: Vec<String>,
+    format: String,
+    map: String,
+    start_time: String,
 }
 
 impl GameServer {
@@ -154,6 +180,8 @@ impl GameServer {
             broadcast_tx: tx,
             running: Arc::new(AtomicBool::new(false)),
             world_json: Arc::new(Mutex::new(None)),
+            game_meta: Arc::new(Mutex::new(None)),
+            current_tick: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -175,6 +203,32 @@ impl GameServer {
     /// Stop the currently running game (if any).
     pub fn stop_game(&self) {
         self.running.store(false, Ordering::Relaxed);
+    }
+
+    /// Get the number of current WebSocket subscribers (spectators).
+    pub fn spectator_count(&self) -> usize {
+        // receiver_count() returns the number of active receivers on the broadcast channel.
+        // Subtract 1 because the game loop itself is not a spectator, but actually
+        // the game loop uses tx.send(), not subscribe(), so receiver_count is accurate.
+        self.broadcast_tx.receiver_count()
+    }
+
+    /// Get information about the currently active game, if any.
+    pub fn active_game_info(&self) -> Option<ActiveGameInfo> {
+        if !self.is_running() {
+            return None;
+        }
+        let meta = self.game_meta.lock().unwrap().clone()?;
+        let tick = self.current_tick.load(Ordering::Relaxed);
+        Some(ActiveGameInfo {
+            match_id: meta.match_id,
+            player_names: meta.player_names,
+            format: meta.format,
+            map: meta.map,
+            start_time: meta.start_time,
+            spectator_count: self.spectator_count(),
+            game_time_seconds: tick as f64 * 0.1, // 100ms per tick
+        })
     }
 
     /// Start a game with the given world and players.
@@ -213,7 +267,25 @@ impl GameServer {
         let tx = self.broadcast_tx.clone();
         let running = self.running.clone();
         let world_json = self.world_json.clone();
+        let game_meta = self.game_meta.clone();
+        let current_tick = self.current_tick.clone();
         let max_ticks = max_ticks.unwrap_or(6000);
+
+        // Store game metadata for active game listing
+        let player_names: Vec<String> = players.iter().map(|p| p.name.clone()).collect();
+        let format = if players.len() == 2 {
+            "1v1".to_string()
+        } else {
+            "ffa".to_string()
+        };
+        *game_meta.lock().unwrap() = Some(GameMeta {
+            match_id,
+            player_names,
+            format,
+            map: "unknown".to_string(), // Will be overridden by callers via set_game_map
+            start_time: chrono::Utc::now().to_rfc3339(),
+        });
+        current_tick.store(0, Ordering::Relaxed);
 
         running.store(true, Ordering::Relaxed);
 
@@ -298,6 +370,7 @@ impl GameServer {
                     let tick_elapsed_ms = tick_start.elapsed().as_secs_f64() * 1000.0;
                     metrics::GAME_TICK_DURATION_MS.observe(tick_elapsed_ms);
                     tick_count += 1;
+                    current_tick.store(tick_count as i64, Ordering::Relaxed);
 
                     let snapshot = game.snapshot();
 
@@ -440,10 +513,20 @@ impl GameServer {
 
             metrics::ACTIVE_GAMES.set(0);
             *world_json.lock().unwrap() = None;
+            *game_meta.lock().unwrap() = None;
+            current_tick.store(0, Ordering::Relaxed);
             running.store(false, Ordering::Relaxed);
         });
 
         Ok(())
+    }
+
+    /// Set the map name on the current game metadata.
+    /// Called after start_game_with_callback by the API layer which knows the map name.
+    pub fn set_game_map(&self, map: &str) {
+        if let Some(ref mut meta) = *self.game_meta.lock().unwrap() {
+            meta.map = map.to_string();
+        }
     }
 
     /// Create a default world using random map generation.

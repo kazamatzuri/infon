@@ -206,6 +206,20 @@ pub struct TeamVersion {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Notification {
+    pub id: i64,
+    pub user_id: i64,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "type")]
+    pub notification_type: String,
+    pub title: String,
+    pub message: String,
+    pub data: Option<String>,
+    pub read: bool,
+    pub created_at: String,
+}
+
 pub struct Database {
     pool: SqlitePool,
 }
@@ -491,6 +505,24 @@ impl Database {
                 token_hash TEXT NOT NULL,
                 scopes TEXT NOT NULL DEFAULT 'bots:read,matches:read,leaderboard:read',
                 last_used_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Notifications table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                type TEXT NOT NULL DEFAULT 'info',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                data TEXT,
+                read INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         "#,
@@ -1627,6 +1659,101 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    // ── Notification CRUD ────────────────────────────────────────────
+
+    pub async fn create_notification(
+        &self,
+        user_id: i64,
+        notification_type: &str,
+        title: &str,
+        message: &str,
+        data: Option<&str>,
+    ) -> Result<Notification, sqlx::Error> {
+        let row = sqlx::query_as::<_, Notification>(
+            "INSERT INTO notifications (user_id, type, title, message, data) VALUES (?, ?, ?, ?, ?) RETURNING id, user_id, type, title, message, data, read, created_at",
+        )
+        .bind(user_id)
+        .bind(notification_type)
+        .bind(title)
+        .bind(message)
+        .bind(data)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_unread_notifications(
+        &self,
+        user_id: i64,
+    ) -> Result<Vec<Notification>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Notification>(
+            "SELECT id, user_id, type, title, message, data, read, created_at FROM notifications WHERE user_id = ? AND read = 0 ORDER BY id DESC LIMIT 50",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn list_recent_notifications(
+        &self,
+        user_id: i64,
+        limit: i64,
+    ) -> Result<Vec<Notification>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Notification>(
+            "SELECT id, user_id, type, title, message, data, read, created_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn mark_notification_read(
+        &self,
+        id: i64,
+        user_id: i64,
+    ) -> Result<bool, sqlx::Error> {
+        let result =
+            sqlx::query("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?")
+                .bind(id)
+                .bind(user_id)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn unread_notification_count(&self, user_id: i64) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read = 0",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    /// Get all unique owner IDs for bot versions involved in a match.
+    pub async fn get_match_participant_owner_ids(
+        &self,
+        match_id: i64,
+    ) -> Result<Vec<i64>, sqlx::Error> {
+        let rows: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT b.owner_id
+            FROM match_participants mp
+            JOIN bot_versions bv ON bv.id = mp.bot_version_id
+            JOIN bots b ON b.id = bv.bot_id
+            WHERE mp.match_id = ? AND b.owner_id IS NOT NULL
+            "#,
+        )
+        .bind(match_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 }
 
