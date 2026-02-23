@@ -1,0 +1,22 @@
+# Docker Compose for local/self-hosted play.
+# Builds a single production image and runs it with local mode enabled.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
+#   just local-run
+#
+# Then open http://localhost:3000 in your browser.
+
+services:
+  infon:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - infon-data:/data
+    environment:
+      - INFON_LOCAL_MODE=true
+      - RUST_LOG=info
+
+volumes:
+  infon-data:

@@ -131,6 +131,17 @@ async fn try_api_token_auth(token: &str, parts: &Parts) -> Option<Claims> {
     })
 }
 
+/// Build synthetic claims for local mode (no real auth).
+fn local_mode_claims() -> Claims {
+    Claims {
+        sub: crate::config::LOCAL_USER_ID,
+        username: crate::config::LOCAL_USERNAME.to_string(),
+        role: "user".to_string(),
+        exp: (chrono::Utc::now().timestamp() + 86400 * 365) as usize,
+        scopes: None, // full access
+    }
+}
+
 // ── Axum extractor: AuthUser ─────────────────────────────────────────
 
 /// Extracts the authenticated user from the Authorization header.
@@ -146,6 +157,11 @@ where
     type Rejection = (StatusCode, Json<serde_json::Value>);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // In local mode, skip authentication entirely and use the local user
+        if crate::config::is_local_mode() {
+            return Ok(AuthUser(local_mode_claims()));
+        }
+
         let auth_header = parts
             .headers
             .get("Authorization")
@@ -193,6 +209,11 @@ where
     type Rejection = (StatusCode, Json<serde_json::Value>);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // In local mode, always provide the local user
+        if crate::config::is_local_mode() {
+            return Ok(OptionalAuthUser(Some(local_mode_claims())));
+        }
+
         let auth_header = parts
             .headers
             .get("Authorization")
@@ -466,6 +487,77 @@ pub async fn update_profile(
                 .into_response()
         }
     }
+}
+
+/// Auto-login endpoint for local mode. Returns a JWT token for the local user
+/// without requiring credentials. Returns 404 if not in local mode.
+pub async fn local_login(State(db): State<Arc<Database>>) -> impl IntoResponse {
+    if !crate::config::is_local_mode() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Not found"})),
+        )
+            .into_response();
+    }
+
+    // Find or use the local user
+    match db
+        .get_user_by_username(crate::config::LOCAL_USERNAME)
+        .await
+    {
+        Ok(Some(user)) => {
+            let token = match create_token(user.id, &user.username, &user.role) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!("Token creation error: {e}");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Internal error"})),
+                    )
+                        .into_response();
+                }
+            };
+            (
+                StatusCode::OK,
+                Json(serde_json::json!(AuthResponse {
+                    token,
+                    user: UserPublic {
+                        id: user.id,
+                        username: user.username,
+                        email: user.email,
+                        display_name: user.display_name,
+                        role: user.role,
+                        created_at: user.created_at,
+                    },
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Local user not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("DB error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Check whether local mode is enabled (used by frontend to show/hide login).
+pub async fn local_mode_status() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "local_mode": crate::config::is_local_mode()
+        })),
+    )
+        .into_response()
 }
 
 pub async fn me(AuthUser(claims): AuthUser, State(db): State<Arc<Database>>) -> impl IntoResponse {
