@@ -447,9 +447,7 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
               <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '16px' }}>
                 {gameEnd.match_id && (
                   <a
-                    href={`/replay/${gameEnd.match_id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    href={`/matches/${gameEnd.match_id}`}
                     style={{
                       padding: '8px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: 600,
                       color: '#f5a623', border: '1px solid #f5a623', background: 'transparent',
