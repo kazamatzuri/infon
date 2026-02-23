@@ -220,6 +220,15 @@ pub struct Notification {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Feedback {
+    pub id: i64,
+    pub user_id: Option<i64>,
+    pub category: String,
+    pub description: String,
+    pub created_at: String,
+}
+
 pub struct Database {
     pool: SqlitePool,
 }
@@ -523,6 +532,21 @@ impl Database {
                 message TEXT NOT NULL DEFAULT '',
                 data TEXT,
                 read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Feedback table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER REFERENCES users(id),
+                category TEXT NOT NULL DEFAULT 'general',
+                description TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         "#,
@@ -1754,6 +1778,34 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    // ── Feedback CRUD ─────────────────────────────────────────────────
+
+    pub async fn create_feedback(
+        &self,
+        user_id: Option<i64>,
+        category: &str,
+        description: &str,
+    ) -> Result<Feedback, sqlx::Error> {
+        let row = sqlx::query_as::<_, Feedback>(
+            "INSERT INTO feedback (user_id, category, description) VALUES (?, ?, ?) RETURNING id, user_id, category, description, created_at",
+        )
+        .bind(user_id)
+        .bind(category)
+        .bind(description)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn list_feedback(&self) -> Result<Vec<Feedback>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, Feedback>(
+            "SELECT id, user_id, category, description, created_at FROM feedback ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 }
 

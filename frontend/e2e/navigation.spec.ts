@@ -53,7 +53,7 @@ test.describe('Navigation & Layout', () => {
 
     await nav.getByRole('link', { name: 'Docs' }).click();
     await expect(page).toHaveURL('/docs');
-    await expect(page.getByRole('heading', { name: 'Lua API Reference' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Getting Started' })).toBeVisible();
   });
 
   test('protected routes redirect to login when unauthenticated', async ({ page }) => {

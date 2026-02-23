@@ -25,7 +25,14 @@ test.describe('Page Rendering - Public Routes', () => {
 
   test('/docs renders documentation page', async ({ page }) => {
     await page.goto('/docs');
-    await expect(page.getByRole('heading', { name: 'Lua API Reference' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Documentation' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Getting Started' })).toBeVisible();
+  });
+
+  test('/about renders about page', async ({ page }) => {
+    await page.goto('/about');
+    await expect(page.getByRole('heading', { name: 'About Infon Battle Arena' })).toBeVisible();
+    await expect(page.getByText('Florian Wesch')).toBeVisible();
   });
 
   test('/login renders login form', async ({ page }) => {

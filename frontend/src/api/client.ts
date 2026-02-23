@@ -253,6 +253,14 @@ export interface SnapshotDeltaMsg {
   king_player_id?: number;
 }
 
+export interface Feedback {
+  id: number;
+  user_id: number | null;
+  category: string;
+  description: string;
+  created_at: string;
+}
+
 export type GameMessage = WorldMsg | SnapshotMsg | SnapshotDeltaMsg | GameEndMsg | PlayerLoadErrorMsg;
 
 export interface TileSnapshot {
@@ -513,4 +521,15 @@ export const api = {
     }).then(r => {
       if (!r.ok) throw new Error(`Mark read failed: ${r.status}`);
     }),
+
+  // Feedback
+  submitFeedback: (category: string, description: string): Promise<Feedback> =>
+    fetch(`${BASE_URL}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ category, description }),
+    }).then(r => handleResponse<Feedback>(r)),
+
+  listFeedback: (): Promise<Feedback[]> =>
+    fetch(`${BASE_URL}/api/feedback`, { headers: authHeaders() }).then(r => handleResponse<Feedback[]>(r)),
 };
