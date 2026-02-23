@@ -1,7 +1,17 @@
-// Database access layer (SQLite via sqlx).
+// Database access layer using sqlx's Any driver (supports SQLite and PostgreSQL).
 
-use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use serde::{Deserialize, Serialize, Serializer};
+use sqlx::any::{AnyPoolOptions, AnyQueryResult};
+use sqlx::AnyPool;
+
+/// Serialize an i32 as a boolean (0 = false, non-zero = true).
+/// Used for columns stored as INTEGER in SQLite but logically boolean.
+fn serialize_int_as_bool<S>(val: &i32, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_bool(*val != 0)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct User {
@@ -52,7 +62,10 @@ pub struct BotVersion {
     pub version: i32,
     pub code: String,
     pub api_type: String,
-    pub is_archived: bool,
+    /// Stored as INTEGER (0/1) for cross-database compatibility with the Any driver.
+    /// Serialized as boolean for API consumers.
+    #[serde(serialize_with = "serialize_int_as_bool")]
+    pub is_archived: i32,
     pub elo_rating: i32,
     pub elo_1v1: i32,
     pub elo_peak: i32,
@@ -207,24 +220,223 @@ pub struct TeamVersion {
 }
 
 pub struct Database {
-    pool: SqlitePool,
+    pool: AnyPool,
+    is_postgres: bool,
 }
 
 impl Database {
+    /// Execute a raw SQL statement, returning the query result.
+    /// This helper exists to provide type information for the Any driver.
+    async fn exec(&self, sql: &str) -> Result<AnyQueryResult, sqlx::Error> {
+        sqlx::query(sql).execute(&self.pool).await
+    }
+
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+        let is_postgres = database_url.starts_with("postgres://")
+            || database_url.starts_with("postgresql://");
+        // For SQLite in-memory databases, limit to 1 connection so all
+        // queries share the same in-memory database.
+        let is_memory = database_url.contains(":memory:");
+        let max_conn = if is_memory { 1 } else { 5 };
+        let pool = AnyPoolOptions::new()
+            .max_connections(max_conn)
             .connect(database_url)
             .await?;
-        let db = Self { pool };
+        let db = Self { pool, is_postgres };
         db.run_migrations().await?;
         Ok(db)
     }
 
     async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        // Users table
-        sqlx::query(
-            r#"
+        if self.is_postgres {
+            self.run_migrations_postgres().await
+        } else {
+            self.run_migrations_sqlite().await
+        }
+    }
+
+    async fn run_migrations_postgres(&self) -> Result<(), sqlx::Error> {
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT,
+                display_name TEXT,
+                avatar_url TEXT,
+                bio TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                updated_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS bots (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                owner_id BIGINT REFERENCES users(id),
+                visibility TEXT NOT NULL DEFAULT 'public',
+                active_version_id BIGINT,
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                updated_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS bot_versions (
+                id BIGSERIAL PRIMARY KEY,
+                bot_id BIGINT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+                version INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                api_type TEXT NOT NULL DEFAULT 'oo',
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                elo_rating INTEGER NOT NULL DEFAULT 1500,
+                elo_1v1 INTEGER NOT NULL DEFAULT 1500,
+                elo_peak INTEGER NOT NULL DEFAULT 1500,
+                games_played INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                draws INTEGER NOT NULL DEFAULT 0,
+                ffa_placement_points INTEGER NOT NULL DEFAULT 0,
+                ffa_games INTEGER NOT NULL DEFAULT 0,
+                creatures_spawned INTEGER NOT NULL DEFAULT 0,
+                creatures_killed INTEGER NOT NULL DEFAULT 0,
+                creatures_lost INTEGER NOT NULL DEFAULT 0,
+                total_score BIGINT NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                UNIQUE(bot_id, version)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS matches (
+                id BIGSERIAL PRIMARY KEY,
+                format TEXT NOT NULL DEFAULT '1v1',
+                map TEXT NOT NULL DEFAULT 'random',
+                status TEXT NOT NULL DEFAULT 'pending',
+                winner_bot_version_id BIGINT,
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                finished_at TEXT
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS match_participants (
+                id BIGSERIAL PRIMARY KEY,
+                match_id BIGINT NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                bot_version_id BIGINT NOT NULL REFERENCES bot_versions(id),
+                player_slot INTEGER NOT NULL,
+                final_score INTEGER NOT NULL DEFAULT 0,
+                placement INTEGER,
+                elo_before INTEGER,
+                elo_after INTEGER,
+                creatures_spawned INTEGER NOT NULL DEFAULT 0,
+                creatures_killed INTEGER NOT NULL DEFAULT 0,
+                creatures_lost INTEGER NOT NULL DEFAULT 0
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS tournaments (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'created',
+                map TEXT NOT NULL DEFAULT 'default',
+                config TEXT NOT NULL DEFAULT '{}',
+                format TEXT NOT NULL DEFAULT 'round_robin',
+                current_round INTEGER NOT NULL DEFAULT 0,
+                total_rounds INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS tournament_entries (
+                id BIGSERIAL PRIMARY KEY,
+                tournament_id BIGINT NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                bot_version_id BIGINT NOT NULL REFERENCES bot_versions(id),
+                slot_name TEXT NOT NULL DEFAULT ''
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS tournament_results (
+                id BIGSERIAL PRIMARY KEY,
+                tournament_id BIGINT NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                player_slot INTEGER NOT NULL,
+                bot_version_id BIGINT NOT NULL REFERENCES bot_versions(id),
+                final_score INTEGER NOT NULL DEFAULT 0,
+                creatures_spawned INTEGER NOT NULL DEFAULT 0,
+                creatures_killed INTEGER NOT NULL DEFAULT 0,
+                creatures_lost INTEGER NOT NULL DEFAULT 0,
+                finished_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS tournament_matches (
+                id BIGSERIAL PRIMARY KEY,
+                tournament_id BIGINT NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                match_id BIGINT NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                round INTEGER NOT NULL DEFAULT 1
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS teams (
+                id BIGSERIAL PRIMARY KEY,
+                owner_id BIGINT NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS team_versions (
+                id BIGSERIAL PRIMARY KEY,
+                team_id BIGINT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                version INTEGER NOT NULL,
+                bot_version_a BIGINT NOT NULL REFERENCES bot_versions(id),
+                bot_version_b BIGINT NOT NULL REFERENCES bot_versions(id),
+                elo_rating INTEGER NOT NULL DEFAULT 1500,
+                games_played INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                draws INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (now()::text),
+                UNIQUE(team_id, version)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS replays (
+                id BIGSERIAL PRIMARY KEY,
+                match_id BIGINT NOT NULL UNIQUE REFERENCES matches(id) ON DELETE CASCADE,
+                data BYTEA NOT NULL,
+                tick_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                scopes TEXT NOT NULL DEFAULT 'bots:read,matches:read,leaderboard:read',
+                last_used_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        Ok(())
+    }
+
+    async fn run_migrations_sqlite(&self) -> Result<(), sqlx::Error> {
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
@@ -237,13 +449,9 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS bots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -254,25 +462,14 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
         // Add columns to existing bots table if missing
-        let _ = sqlx::query("ALTER TABLE bots ADD COLUMN owner_id INTEGER REFERENCES users(id)")
-            .execute(&self.pool)
-            .await;
-        let _ =
-            sqlx::query("ALTER TABLE bots ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
-                .execute(&self.pool)
-                .await;
-        let _ = sqlx::query("ALTER TABLE bots ADD COLUMN active_version_id INTEGER")
-            .execute(&self.pool)
-            .await;
+        let _ = self.exec("ALTER TABLE bots ADD COLUMN owner_id INTEGER REFERENCES users(id)").await;
+        let _ = self.exec("ALTER TABLE bots ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'").await;
+        let _ = self.exec("ALTER TABLE bots ADD COLUMN active_version_id INTEGER").await;
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS bot_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bot_id INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
@@ -296,10 +493,7 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(bot_id, version)
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
         // Add new columns to existing bot_versions if missing
         for col in &[
@@ -318,14 +512,10 @@ impl Database {
             "creatures_lost INTEGER NOT NULL DEFAULT 0",
             "total_score INTEGER NOT NULL DEFAULT 0",
         ] {
-            let _ = sqlx::query(&format!("ALTER TABLE bot_versions ADD COLUMN {col}"))
-                .execute(&self.pool)
-                .await;
+            let _ = self.exec(&format!("ALTER TABLE bot_versions ADD COLUMN {col}")).await;
         }
 
-        // Matches table
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS matches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 format TEXT NOT NULL DEFAULT '1v1',
@@ -335,13 +525,9 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 finished_at TEXT
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS match_participants (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
@@ -355,13 +541,9 @@ impl Database {
                 creatures_killed INTEGER NOT NULL DEFAULT 0,
                 creatures_lost INTEGER NOT NULL DEFAULT 0
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS tournaments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -370,10 +552,7 @@ impl Database {
                 config TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
         // Add new columns to existing tournaments table if missing
         for col in &[
@@ -381,26 +560,19 @@ impl Database {
             "current_round INTEGER NOT NULL DEFAULT 0",
             "total_rounds INTEGER NOT NULL DEFAULT 1",
         ] {
-            let _ = sqlx::query(&format!("ALTER TABLE tournaments ADD COLUMN {col}"))
-                .execute(&self.pool)
-                .await;
+            let _ = self.exec(&format!("ALTER TABLE tournaments ADD COLUMN {col}")).await;
         }
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS tournament_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
                 bot_version_id INTEGER NOT NULL REFERENCES bot_versions(id),
                 slot_name TEXT NOT NULL DEFAULT ''
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS tournament_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
@@ -412,41 +584,27 @@ impl Database {
                 creatures_lost INTEGER NOT NULL DEFAULT 0,
                 finished_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        // Tournament-Match linking table
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS tournament_matches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
                 match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
                 round INTEGER NOT NULL DEFAULT 1
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        // Teams table
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS teams (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_id INTEGER NOT NULL REFERENCES users(id),
                 name TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS team_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
@@ -461,14 +619,9 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(team_id, version)
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        // Replays table
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS replays (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 match_id INTEGER NOT NULL UNIQUE REFERENCES matches(id) ON DELETE CASCADE,
@@ -476,14 +629,9 @@ impl Database {
                 tick_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
-        // API tokens table
-        sqlx::query(
-            r#"
+        self.exec(r#"
             CREATE TABLE IF NOT EXISTS api_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -493,12 +641,19 @@ impl Database {
                 last_used_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        "#).await?;
 
         Ok(())
+    }
+
+    /// Returns the SQL expression for the current timestamp as text,
+    /// appropriate for the connected database backend.
+    fn now_expr(&self) -> &'static str {
+        if self.is_postgres {
+            "now()::text"
+        } else {
+            "datetime('now')"
+        }
     }
 
     // ── User CRUD ─────────────────────────────────────────────────────
@@ -511,7 +666,7 @@ impl Database {
         display_name: &str,
     ) -> Result<User, sqlx::Error> {
         let row = sqlx::query_as::<_, User>(
-            "INSERT INTO users (username, email, password_hash, display_name) VALUES (?, ?, ?, ?) RETURNING id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at",
+            "INSERT INTO users (username, email, password_hash, display_name) VALUES ($1, $2, $3, $4) RETURNING id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at",
         )
         .bind(username)
         .bind(email)
@@ -524,7 +679,7 @@ impl Database {
 
     pub async fn get_user(&self, id: i64) -> Result<Option<User>, sqlx::Error> {
         let row = sqlx::query_as::<_, User>(
-            "SELECT id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at FROM users WHERE id = ?",
+            "SELECT id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -534,7 +689,7 @@ impl Database {
 
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, sqlx::Error> {
         let row = sqlx::query_as::<_, User>(
-            "SELECT id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at FROM users WHERE username = ?",
+            "SELECT id, username, email, password_hash, display_name, avatar_url, bio, role, created_at, updated_at FROM users WHERE username = $1",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -548,14 +703,16 @@ impl Database {
         display_name: Option<&str>,
         bio: Option<&str>,
     ) -> Result<Option<User>, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE users SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio), updated_at = datetime('now') WHERE id = ?",
-        )
-        .bind(display_name)
-        .bind(bio)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "UPDATE users SET display_name = COALESCE($1, display_name), bio = COALESCE($2, bio), updated_at = {} WHERE id = $3",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(display_name)
+            .bind(bio)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Ok(None);
@@ -572,7 +729,7 @@ impl Database {
         owner_id: Option<i64>,
     ) -> Result<Bot, sqlx::Error> {
         let row = sqlx::query_as::<_, Bot>(
-            "INSERT INTO bots (name, description, owner_id) VALUES (?, ?, ?) RETURNING id, name, description, owner_id, visibility, active_version_id, created_at, updated_at",
+            "INSERT INTO bots (name, description, owner_id) VALUES ($1, $2, $3) RETURNING id, name, description, owner_id, visibility, active_version_id, created_at, updated_at",
         )
         .bind(name)
         .bind(description)
@@ -592,7 +749,7 @@ impl Database {
 
     pub async fn list_bots_by_owner(&self, owner_id: i64) -> Result<Vec<Bot>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Bot>(
-            "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE owner_id = ? ORDER BY id",
+            "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE owner_id = $1 ORDER BY id",
         )
         .bind(owner_id)
         .fetch_all(&self.pool)
@@ -657,7 +814,7 @@ impl Database {
                 FROM bot_versions bv
                 GROUP BY bot_id
             ) vs ON vs.bot_id = b.id
-            WHERE b.owner_id = ?
+            WHERE b.owner_id = $1
             ORDER BY b.updated_at DESC
             "#,
         )
@@ -669,7 +826,7 @@ impl Database {
 
     pub async fn get_bot(&self, id: i64) -> Result<Option<Bot>, sqlx::Error> {
         let row = sqlx::query_as::<_, Bot>(
-            "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE id = ?",
+            "SELECT id, name, description, owner_id, visibility, active_version_id, created_at, updated_at FROM bots WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -683,14 +840,16 @@ impl Database {
         name: &str,
         description: &str,
     ) -> Result<Option<Bot>, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE bots SET name = ?, description = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .bind(name)
-        .bind(description)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "UPDATE bots SET name = $1, description = $2, updated_at = {} WHERE id = $3",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(name)
+            .bind(description)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Ok(None);
@@ -704,13 +863,15 @@ impl Database {
         id: i64,
         visibility: &str,
     ) -> Result<Option<Bot>, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE bots SET visibility = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .bind(visibility)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "UPDATE bots SET visibility = $1, updated_at = {} WHERE id = $2",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(visibility)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Ok(None);
@@ -719,7 +880,7 @@ impl Database {
     }
 
     pub async fn delete_bot(&self, id: i64) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM bots WHERE id = ?")
+        let result: AnyQueryResult = sqlx::query("DELETE FROM bots WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -735,7 +896,7 @@ impl Database {
     ) -> Result<BotVersion, sqlx::Error> {
         // Determine next version number for this bot
         let max_version: Option<i32> =
-            sqlx::query_scalar("SELECT MAX(version) FROM bot_versions WHERE bot_id = ?")
+            sqlx::query_scalar("SELECT MAX(version) FROM bot_versions WHERE bot_id = $1")
                 .bind(bot_id)
                 .fetch_one(&self.pool)
                 .await?;
@@ -745,7 +906,7 @@ impl Database {
         // Soft reset: inherit Elo from parent version using (parent_elo + 1500) / 2
         let starting_elo = if next_version > 1 {
             let parent_elo: Option<i32> = sqlx::query_scalar(
-                "SELECT elo_rating FROM bot_versions WHERE bot_id = ? AND version = ?",
+                "SELECT elo_rating FROM bot_versions WHERE bot_id = $1 AND version = $2",
             )
             .bind(bot_id)
             .bind(next_version - 1)
@@ -758,7 +919,7 @@ impl Database {
         };
 
         let row = sqlx::query_as::<_, BotVersion>(
-            "INSERT INTO bot_versions (bot_id, version, code, elo_rating, elo_1v1, elo_peak) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
+            "INSERT INTO bot_versions (bot_id, version, code, elo_rating, elo_1v1, elo_peak) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
         )
         .bind(bot_id)
         .bind(next_version)
@@ -773,7 +934,7 @@ impl Database {
 
     pub async fn list_bot_versions(&self, bot_id: i64) -> Result<Vec<BotVersion>, sqlx::Error> {
         let rows = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = ? ORDER BY version",
+            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = $1 ORDER BY version",
         )
         .bind(bot_id)
         .fetch_all(&self.pool)
@@ -787,7 +948,7 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = ? AND id = ?",
+            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = $1 AND id = $2",
         )
         .bind(bot_id)
         .bind(version_id)
@@ -802,7 +963,7 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE id = ?",
+            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE id = $1",
         )
         .bind(version_id)
         .fetch_optional(&self.pool)
@@ -817,13 +978,15 @@ impl Database {
         bot_id: i64,
         version_id: i64,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE bots SET active_version_id = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .bind(version_id)
-        .bind(bot_id)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "UPDATE bots SET active_version_id = $1, updated_at = {} WHERE id = $2",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(version_id)
+            .bind(bot_id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -832,8 +995,8 @@ impl Database {
         version_id: i64,
         archived: bool,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("UPDATE bot_versions SET is_archived = ? WHERE id = ?")
-            .bind(archived)
+        let result: AnyQueryResult = sqlx::query("UPDATE bot_versions SET is_archived = $1 WHERE id = $2")
+            .bind(archived as i32)
             .bind(version_id)
             .execute(&self.pool)
             .await?;
@@ -842,7 +1005,7 @@ impl Database {
 
     pub async fn get_active_version(&self, bot_id: i64) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT bv.id, bv.bot_id, bv.version, bv.code, bv.api_type, bv.is_archived, bv.elo_rating, bv.elo_1v1, bv.elo_peak, bv.games_played, bv.wins, bv.losses, bv.draws, bv.ffa_placement_points, bv.ffa_games, bv.creatures_spawned, bv.creatures_killed, bv.creatures_lost, bv.total_score, bv.created_at FROM bot_versions bv JOIN bots b ON b.active_version_id = bv.id WHERE b.id = ?",
+            "SELECT bv.id, bv.bot_id, bv.version, bv.code, bv.api_type, bv.is_archived, bv.elo_rating, bv.elo_1v1, bv.elo_peak, bv.games_played, bv.wins, bv.losses, bv.draws, bv.ffa_placement_points, bv.ffa_games, bv.creatures_spawned, bv.creatures_killed, bv.creatures_lost, bv.total_score, bv.created_at FROM bot_versions bv JOIN bots b ON b.active_version_id = bv.id WHERE b.id = $1",
         )
         .bind(bot_id)
         .fetch_optional(&self.pool)
@@ -854,7 +1017,7 @@ impl Database {
 
     pub async fn create_match(&self, format: &str, map: &str) -> Result<Match, sqlx::Error> {
         let row = sqlx::query_as::<_, Match>(
-            "INSERT INTO matches (format, map, status) VALUES (?, ?, 'running') RETURNING id, format, map, status, winner_bot_version_id, created_at, finished_at",
+            "INSERT INTO matches (format, map, status) VALUES ($1, $2, 'running') RETURNING id, format, map, status, winner_bot_version_id, created_at, finished_at",
         )
         .bind(format)
         .bind(map)
@@ -868,19 +1031,21 @@ impl Database {
         match_id: i64,
         winner_bot_version_id: Option<i64>,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE matches SET status = 'finished', winner_bot_version_id = ?, finished_at = datetime('now') WHERE id = ?",
-        )
-        .bind(winner_bot_version_id)
-        .bind(match_id)
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "UPDATE matches SET status = 'finished', winner_bot_version_id = $1, finished_at = {} WHERE id = $2",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(winner_bot_version_id)
+            .bind(match_id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 
     pub async fn get_match(&self, id: i64) -> Result<Option<Match>, sqlx::Error> {
         let row = sqlx::query_as::<_, Match>(
-            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches WHERE id = ?",
+            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -890,7 +1055,7 @@ impl Database {
 
     pub async fn list_recent_matches(&self, limit: i64) -> Result<Vec<Match>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Match>(
-            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches ORDER BY id DESC LIMIT ?",
+            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches ORDER BY id DESC LIMIT $1",
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -905,7 +1070,7 @@ impl Database {
         player_slot: i32,
     ) -> Result<MatchParticipant, sqlx::Error> {
         let row = sqlx::query_as::<_, MatchParticipant>(
-            "INSERT INTO match_participants (match_id, bot_version_id, player_slot) VALUES (?, ?, ?) RETURNING id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost",
+            "INSERT INTO match_participants (match_id, bot_version_id, player_slot) VALUES ($1, $2, $3) RETURNING id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost",
         )
         .bind(match_id)
         .bind(bot_version_id)
@@ -926,8 +1091,8 @@ impl Database {
         creatures_killed: i32,
         creatures_lost: i32,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE match_participants SET final_score = ?, placement = ?, elo_before = ?, elo_after = ?, creatures_spawned = ?, creatures_killed = ?, creatures_lost = ? WHERE id = ?",
+        let result: AnyQueryResult = sqlx::query(
+            "UPDATE match_participants SET final_score = $1, placement = $2, elo_before = $3, elo_after = $4, creatures_spawned = $5, creatures_killed = $6, creatures_lost = $7 WHERE id = $8",
         )
         .bind(final_score)
         .bind(placement)
@@ -947,7 +1112,7 @@ impl Database {
         match_id: i64,
     ) -> Result<Vec<MatchParticipant>, sqlx::Error> {
         let rows = sqlx::query_as::<_, MatchParticipant>(
-            "SELECT id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost FROM match_participants WHERE match_id = ? ORDER BY player_slot",
+            "SELECT id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost FROM match_participants WHERE match_id = $1 ORDER BY player_slot",
         )
         .bind(match_id)
         .fetch_all(&self.pool)
@@ -962,15 +1127,18 @@ impl Database {
         version_id: i64,
         new_elo: i32,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE bot_versions SET elo_rating = ?, elo_1v1 = ?, elo_peak = MAX(elo_peak, ?) WHERE id = ?",
-        )
-        .bind(new_elo)
-        .bind(new_elo)
-        .bind(new_elo)
-        .bind(version_id)
-        .execute(&self.pool)
-        .await?;
+        // GREATEST works on PostgreSQL; for SQLite MAX works in this context too
+        let max_fn = if self.is_postgres { "GREATEST" } else { "MAX" };
+        let sql = format!(
+            "UPDATE bot_versions SET elo_rating = $1, elo_1v1 = $2, elo_peak = {max_fn}(elo_peak, $3) WHERE id = $4"
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(new_elo)
+            .bind(new_elo)
+            .bind(new_elo)
+            .bind(version_id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -985,8 +1153,8 @@ impl Database {
         killed: i32,
         died: i32,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE bot_versions SET games_played = games_played + 1, wins = wins + ?, losses = losses + ?, draws = draws + ?, total_score = total_score + ?, creatures_spawned = creatures_spawned + ?, creatures_killed = creatures_killed + ?, creatures_lost = creatures_lost + ? WHERE id = ?",
+        let result: AnyQueryResult = sqlx::query(
+            "UPDATE bot_versions SET games_played = games_played + 1, wins = wins + $1, losses = losses + $2, draws = draws + $3, total_score = total_score + $4, creatures_spawned = creatures_spawned + $5, creatures_killed = creatures_killed + $6, creatures_lost = creatures_lost + $7 WHERE id = $8",
         )
         .bind(won as i32)
         .bind(lost as i32)
@@ -1006,8 +1174,8 @@ impl Database {
         version_id: i64,
         placement_points: i32,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE bot_versions SET ffa_games = ffa_games + 1, ffa_placement_points = ffa_placement_points + ? WHERE id = ?",
+        let result: AnyQueryResult = sqlx::query(
+            "UPDATE bot_versions SET ffa_games = ffa_games + 1, ffa_placement_points = ffa_placement_points + $1 WHERE id = $2",
         )
         .bind(placement_points)
         .bind(version_id)
@@ -1031,7 +1199,7 @@ impl Database {
         map: &str,
     ) -> Result<Tournament, sqlx::Error> {
         let row = sqlx::query_as::<_, Tournament>(
-            "INSERT INTO tournaments (name, map) VALUES (?, ?) RETURNING id, name, status, map, config, format, current_round, total_rounds, created_at",
+            "INSERT INTO tournaments (name, map) VALUES ($1, $2) RETURNING id, name, status, map, config, format, current_round, total_rounds, created_at",
         )
         .bind(name)
         .bind(map)
@@ -1051,7 +1219,7 @@ impl Database {
 
     pub async fn get_tournament(&self, id: i64) -> Result<Option<Tournament>, sqlx::Error> {
         let row = sqlx::query_as::<_, Tournament>(
-            "SELECT id, name, status, map, config, format, current_round, total_rounds, created_at FROM tournaments WHERE id = ?",
+            "SELECT id, name, status, map, config, format, current_round, total_rounds, created_at FROM tournaments WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -1064,7 +1232,7 @@ impl Database {
         id: i64,
         status: &str,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("UPDATE tournaments SET status = ? WHERE id = ?")
+        let result: AnyQueryResult = sqlx::query("UPDATE tournaments SET status = $1 WHERE id = $2")
             .bind(status)
             .bind(id)
             .execute(&self.pool)
@@ -1073,7 +1241,7 @@ impl Database {
     }
 
     pub async fn update_tournament_round(&self, id: i64, round: i32) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("UPDATE tournaments SET current_round = ? WHERE id = ?")
+        let result: AnyQueryResult = sqlx::query("UPDATE tournaments SET current_round = $1 WHERE id = $2")
             .bind(round)
             .bind(id)
             .execute(&self.pool)
@@ -1089,8 +1257,8 @@ impl Database {
         format: Option<&str>,
         config: Option<&str>,
     ) -> Result<Option<Tournament>, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE tournaments SET name = COALESCE(?, name), map = COALESCE(?, map), format = COALESCE(?, format), config = COALESCE(?, config) WHERE id = ?",
+        let result: AnyQueryResult = sqlx::query(
+            "UPDATE tournaments SET name = COALESCE($1, name), map = COALESCE($2, map), format = COALESCE($3, format), config = COALESCE($4, config) WHERE id = $5",
         )
         .bind(name)
         .bind(map)
@@ -1111,7 +1279,7 @@ impl Database {
         tournament_id: i64,
     ) -> Result<Vec<TournamentStanding>, sqlx::Error> {
         // Aggregate results by bot_version_id, joining with bots table for name
-        let rows = sqlx::query_as::<_, (i64, String, i64, i32)>(
+        let rows: Vec<(i64, String, i64, i32)> = sqlx::query_as(
             r#"
             SELECT
                 tr.bot_version_id,
@@ -1121,7 +1289,7 @@ impl Database {
             FROM tournament_results tr
             JOIN bot_versions bv ON bv.id = tr.bot_version_id
             JOIN bots b ON b.id = bv.bot_id
-            WHERE tr.tournament_id = ?
+            WHERE tr.tournament_id = $1
             GROUP BY tr.bot_version_id
             ORDER BY total_score DESC
             "#,
@@ -1190,7 +1358,7 @@ impl Database {
         slot_name: &str,
     ) -> Result<TournamentEntry, sqlx::Error> {
         let row = sqlx::query_as::<_, TournamentEntry>(
-            "INSERT INTO tournament_entries (tournament_id, bot_version_id, slot_name) VALUES (?, ?, ?) RETURNING id, tournament_id, bot_version_id, slot_name, NULL AS bot_name, NULL AS version",
+            "INSERT INTO tournament_entries (tournament_id, bot_version_id, slot_name) VALUES ($1, $2, $3) RETURNING id, tournament_id, bot_version_id, slot_name, NULL AS bot_name, NULL AS version",
         )
         .bind(tournament_id)
         .bind(bot_version_id)
@@ -1205,7 +1373,7 @@ impl Database {
         tournament_id: i64,
     ) -> Result<Vec<TournamentEntry>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TournamentEntry>(
-            "SELECT te.id, te.tournament_id, te.bot_version_id, te.slot_name, b.name AS bot_name, bv.version FROM tournament_entries te LEFT JOIN bot_versions bv ON bv.id = te.bot_version_id LEFT JOIN bots b ON b.id = bv.bot_id WHERE te.tournament_id = ? ORDER BY te.id",
+            "SELECT te.id, te.tournament_id, te.bot_version_id, te.slot_name, b.name AS bot_name, bv.version FROM tournament_entries te LEFT JOIN bot_versions bv ON bv.id = te.bot_version_id LEFT JOIN bots b ON b.id = bv.bot_id WHERE te.tournament_id = $1 ORDER BY te.id",
         )
         .bind(tournament_id)
         .fetch_all(&self.pool)
@@ -1214,7 +1382,7 @@ impl Database {
     }
 
     pub async fn remove_tournament_entry(&self, entry_id: i64) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM tournament_entries WHERE id = ?")
+        let result: AnyQueryResult = sqlx::query("DELETE FROM tournament_entries WHERE id = $1")
             .bind(entry_id)
             .execute(&self.pool)
             .await?;
@@ -1234,7 +1402,7 @@ impl Database {
         creatures_lost: i32,
     ) -> Result<TournamentResult, sqlx::Error> {
         let row = sqlx::query_as::<_, TournamentResult>(
-            "INSERT INTO tournament_results (tournament_id, player_slot, bot_version_id, final_score, creatures_spawned, creatures_killed, creatures_lost) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, tournament_id, player_slot, bot_version_id, final_score, creatures_spawned, creatures_killed, creatures_lost, finished_at",
+            "INSERT INTO tournament_results (tournament_id, player_slot, bot_version_id, final_score, creatures_spawned, creatures_killed, creatures_lost) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, tournament_id, player_slot, bot_version_id, final_score, creatures_spawned, creatures_killed, creatures_lost, finished_at",
         )
         .bind(tournament_id)
         .bind(player_slot)
@@ -1253,7 +1421,7 @@ impl Database {
         tournament_id: i64,
     ) -> Result<Vec<TournamentResult>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TournamentResult>(
-            "SELECT id, tournament_id, player_slot, bot_version_id, final_score, creatures_spawned, creatures_killed, creatures_lost, finished_at FROM tournament_results WHERE tournament_id = ? ORDER BY final_score DESC",
+            "SELECT id, tournament_id, player_slot, bot_version_id, final_score, creatures_spawned, creatures_killed, creatures_lost, finished_at FROM tournament_results WHERE tournament_id = $1 ORDER BY final_score DESC",
         )
         .bind(tournament_id)
         .fetch_all(&self.pool)
@@ -1270,7 +1438,7 @@ impl Database {
         round: i32,
     ) -> Result<TournamentMatch, sqlx::Error> {
         let row = sqlx::query_as::<_, TournamentMatch>(
-            "INSERT INTO tournament_matches (tournament_id, match_id, round) VALUES (?, ?, ?) RETURNING id, tournament_id, match_id, round",
+            "INSERT INTO tournament_matches (tournament_id, match_id, round) VALUES ($1, $2, $3) RETURNING id, tournament_id, match_id, round",
         )
         .bind(tournament_id)
         .bind(match_id)
@@ -1285,7 +1453,7 @@ impl Database {
         tournament_id: i64,
     ) -> Result<Vec<TournamentMatch>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TournamentMatch>(
-            "SELECT id, tournament_id, match_id, round FROM tournament_matches WHERE tournament_id = ? ORDER BY round, id",
+            "SELECT id, tournament_id, match_id, round FROM tournament_matches WHERE tournament_id = $1 ORDER BY round, id",
         )
         .bind(tournament_id)
         .fetch_all(&self.pool)
@@ -1299,7 +1467,7 @@ impl Database {
         round: i32,
     ) -> Result<Vec<TournamentMatch>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TournamentMatch>(
-            "SELECT id, tournament_id, match_id, round FROM tournament_matches WHERE tournament_id = ? AND round = ? ORDER BY id",
+            "SELECT id, tournament_id, match_id, round FROM tournament_matches WHERE tournament_id = $1 AND round = $2 ORDER BY id",
         )
         .bind(tournament_id)
         .bind(round)
@@ -1314,7 +1482,7 @@ impl Database {
         match_id: i64,
     ) -> Result<Option<(i64, i32)>, sqlx::Error> {
         let row = sqlx::query_as::<_, (i64, i32)>(
-            "SELECT tournament_id, round FROM tournament_matches WHERE match_id = ? LIMIT 1",
+            "SELECT tournament_id, round FROM tournament_matches WHERE match_id = $1 LIMIT 1",
         )
         .bind(match_id)
         .fetch_optional(&self.pool)
@@ -1329,7 +1497,9 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, LeaderboardEntry>(
+        // CAST AS REAL works on SQLite; PostgreSQL needs DOUBLE PRECISION
+        let cast_type = if self.is_postgres { "DOUBLE PRECISION" } else { "REAL" };
+        let sql = format!(
             r#"
             SELECT
                 ROW_NUMBER() OVER (ORDER BY bv.elo_1v1 DESC) AS rank,
@@ -1342,7 +1512,7 @@ impl Database {
                 bv.wins,
                 bv.losses,
                 CASE WHEN bv.games_played > 0
-                    THEN CAST(bv.wins AS REAL) / bv.games_played
+                    THEN CAST(bv.wins AS {cast_type}) / bv.games_played
                     ELSE 0.0
                 END AS win_rate
             FROM bot_versions bv
@@ -1350,13 +1520,14 @@ impl Database {
             LEFT JOIN users u ON u.id = b.owner_id
             WHERE bv.is_archived = 0 AND bv.games_played > 0
             ORDER BY bv.elo_1v1 DESC
-            LIMIT ? OFFSET ?
-            "#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+            LIMIT $1 OFFSET $2
+            "#
+        );
+        let rows = sqlx::query_as::<_, LeaderboardEntry>(&sql)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -1365,7 +1536,8 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, LeaderboardEntry>(
+        let cast_type = if self.is_postgres { "DOUBLE PRECISION" } else { "REAL" };
+        let sql = format!(
             r#"
             SELECT
                 ROW_NUMBER() OVER (ORDER BY bv.ffa_placement_points DESC) AS rank,
@@ -1378,7 +1550,7 @@ impl Database {
                 bv.wins,
                 bv.losses,
                 CASE WHEN bv.games_played > 0
-                    THEN CAST(bv.wins AS REAL) / bv.games_played
+                    THEN CAST(bv.wins AS {cast_type}) / bv.games_played
                     ELSE 0.0
                 END AS win_rate
             FROM bot_versions bv
@@ -1386,13 +1558,14 @@ impl Database {
             LEFT JOIN users u ON u.id = b.owner_id
             WHERE bv.is_archived = 0 AND bv.games_played > 0
             ORDER BY bv.ffa_placement_points DESC
-            LIMIT ? OFFSET ?
-            "#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+            LIMIT $1 OFFSET $2
+            "#
+        );
+        let rows = sqlx::query_as::<_, LeaderboardEntry>(&sql)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -1400,7 +1573,7 @@ impl Database {
 
     pub async fn create_team(&self, owner_id: i64, name: &str) -> Result<Team, sqlx::Error> {
         let row = sqlx::query_as::<_, Team>(
-            "INSERT INTO teams (owner_id, name) VALUES (?, ?) RETURNING id, owner_id, name, created_at",
+            "INSERT INTO teams (owner_id, name) VALUES ($1, $2) RETURNING id, owner_id, name, created_at",
         )
         .bind(owner_id)
         .bind(name)
@@ -1411,7 +1584,7 @@ impl Database {
 
     pub async fn list_teams_by_owner(&self, owner_id: i64) -> Result<Vec<Team>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Team>(
-            "SELECT id, owner_id, name, created_at FROM teams WHERE owner_id = ? ORDER BY id",
+            "SELECT id, owner_id, name, created_at FROM teams WHERE owner_id = $1 ORDER BY id",
         )
         .bind(owner_id)
         .fetch_all(&self.pool)
@@ -1421,7 +1594,7 @@ impl Database {
 
     pub async fn get_team(&self, id: i64) -> Result<Option<Team>, sqlx::Error> {
         let row = sqlx::query_as::<_, Team>(
-            "SELECT id, owner_id, name, created_at FROM teams WHERE id = ?",
+            "SELECT id, owner_id, name, created_at FROM teams WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -1430,7 +1603,7 @@ impl Database {
     }
 
     pub async fn update_team_name(&self, id: i64, name: &str) -> Result<Option<Team>, sqlx::Error> {
-        let result = sqlx::query("UPDATE teams SET name = ? WHERE id = ?")
+        let result: AnyQueryResult = sqlx::query("UPDATE teams SET name = $1 WHERE id = $2")
             .bind(name)
             .bind(id)
             .execute(&self.pool)
@@ -1442,7 +1615,7 @@ impl Database {
     }
 
     pub async fn delete_team(&self, id: i64) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM teams WHERE id = ?")
+        let result: AnyQueryResult = sqlx::query("DELETE FROM teams WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -1458,7 +1631,7 @@ impl Database {
         bot_version_b: i64,
     ) -> Result<TeamVersion, sqlx::Error> {
         let max_version: Option<i32> =
-            sqlx::query_scalar("SELECT MAX(version) FROM team_versions WHERE team_id = ?")
+            sqlx::query_scalar("SELECT MAX(version) FROM team_versions WHERE team_id = $1")
                 .bind(team_id)
                 .fetch_one(&self.pool)
                 .await?;
@@ -1466,7 +1639,7 @@ impl Database {
         let next_version = max_version.unwrap_or(0) + 1;
 
         let row = sqlx::query_as::<_, TeamVersion>(
-            "INSERT INTO team_versions (team_id, version, bot_version_a, bot_version_b) VALUES (?, ?, ?, ?) RETURNING id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at",
+            "INSERT INTO team_versions (team_id, version, bot_version_a, bot_version_b) VALUES ($1, $2, $3, $4) RETURNING id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at",
         )
         .bind(team_id)
         .bind(next_version)
@@ -1479,7 +1652,7 @@ impl Database {
 
     pub async fn list_team_versions(&self, team_id: i64) -> Result<Vec<TeamVersion>, sqlx::Error> {
         let rows = sqlx::query_as::<_, TeamVersion>(
-            "SELECT id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at FROM team_versions WHERE team_id = ? ORDER BY version",
+            "SELECT id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at FROM team_versions WHERE team_id = $1 ORDER BY version",
         )
         .bind(team_id)
         .fetch_all(&self.pool)
@@ -1493,7 +1666,7 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<TeamVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, TeamVersion>(
-            "SELECT id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at FROM team_versions WHERE team_id = ? AND id = ?",
+            "SELECT id, team_id, version, bot_version_a, bot_version_b, elo_rating, games_played, wins, losses, draws, created_at FROM team_versions WHERE team_id = $1 AND id = $2",
         )
         .bind(team_id)
         .bind(version_id)
@@ -1507,7 +1680,8 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<LeaderboardEntry>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, LeaderboardEntry>(
+        let cast_type = if self.is_postgres { "DOUBLE PRECISION" } else { "REAL" };
+        let sql = format!(
             r#"
             SELECT
                 ROW_NUMBER() OVER (ORDER BY tv.elo_rating DESC) AS rank,
@@ -1520,7 +1694,7 @@ impl Database {
                 tv.wins,
                 tv.losses,
                 CASE WHEN tv.games_played > 0
-                    THEN CAST(tv.wins AS REAL) / tv.games_played
+                    THEN CAST(tv.wins AS {cast_type}) / tv.games_played
                     ELSE 0.0
                 END AS win_rate
             FROM team_versions tv
@@ -1528,13 +1702,14 @@ impl Database {
             LEFT JOIN users u ON u.id = t.owner_id
             WHERE tv.games_played > 0
             ORDER BY tv.elo_rating DESC
-            LIMIT ? OFFSET ?
-            "#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+            LIMIT $1 OFFSET $2
+            "#
+        );
+        let rows = sqlx::query_as::<_, LeaderboardEntry>(&sql)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -1548,7 +1723,7 @@ impl Database {
         scopes: &str,
     ) -> Result<ApiToken, sqlx::Error> {
         let row = sqlx::query_as::<_, ApiToken>(
-            "INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES (?, ?, ?, ?) RETURNING id, user_id, name, token_hash, scopes, last_used_at, created_at",
+            "INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES ($1, $2, $3, $4) RETURNING id, user_id, name, token_hash, scopes, last_used_at, created_at",
         )
         .bind(user_id)
         .bind(name)
@@ -1561,7 +1736,7 @@ impl Database {
 
     pub async fn list_api_tokens(&self, user_id: i64) -> Result<Vec<ApiToken>, sqlx::Error> {
         let rows = sqlx::query_as::<_, ApiToken>(
-            "SELECT id, user_id, name, token_hash, scopes, last_used_at, created_at FROM api_tokens WHERE user_id = ? ORDER BY id",
+            "SELECT id, user_id, name, token_hash, scopes, last_used_at, created_at FROM api_tokens WHERE user_id = $1 ORDER BY id",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -1570,7 +1745,7 @@ impl Database {
     }
 
     pub async fn delete_api_token(&self, id: i64, user_id: i64) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
+        let result: AnyQueryResult = sqlx::query("DELETE FROM api_tokens WHERE id = $1 AND user_id = $2")
             .bind(id)
             .bind(user_id)
             .execute(&self.pool)
@@ -1583,7 +1758,7 @@ impl Database {
         token_hash: &str,
     ) -> Result<Option<ApiToken>, sqlx::Error> {
         let row = sqlx::query_as::<_, ApiToken>(
-            "SELECT id, user_id, name, token_hash, scopes, last_used_at, created_at FROM api_tokens WHERE token_hash = ?",
+            "SELECT id, user_id, name, token_hash, scopes, last_used_at, created_at FROM api_tokens WHERE token_hash = $1",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
@@ -1592,11 +1767,14 @@ impl Database {
     }
 
     pub async fn update_token_last_used(&self, id: i64) -> Result<bool, sqlx::Error> {
-        let result =
-            sqlx::query("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?")
-                .bind(id)
-                .execute(&self.pool)
-                .await?;
+        let sql = format!(
+            "UPDATE api_tokens SET last_used_at = {} WHERE id = $1",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -1609,7 +1787,7 @@ impl Database {
         tick_count: i32,
     ) -> Result<Replay, sqlx::Error> {
         let row = sqlx::query_as::<_, Replay>(
-            "INSERT INTO replays (match_id, data, tick_count) VALUES (?, ?, ?) RETURNING id, match_id, data, tick_count, created_at",
+            "INSERT INTO replays (match_id, data, tick_count) VALUES ($1, $2, $3) RETURNING id, match_id, data, tick_count, created_at",
         )
         .bind(match_id)
         .bind(data)
@@ -1621,7 +1799,7 @@ impl Database {
 
     pub async fn get_replay(&self, match_id: i64) -> Result<Option<Replay>, sqlx::Error> {
         let row = sqlx::query_as::<_, Replay>(
-            "SELECT id, match_id, data, tick_count, created_at FROM replays WHERE match_id = ?",
+            "SELECT id, match_id, data, tick_count, created_at FROM replays WHERE match_id = $1",
         )
         .bind(match_id)
         .fetch_optional(&self.pool)
@@ -1635,6 +1813,8 @@ mod tests {
     use super::*;
 
     async fn test_db() -> Database {
+        // Install Any driver support (safe to call multiple times)
+        sqlx::any::install_default_drivers();
         Database::new("sqlite::memory:").await.unwrap()
     }
 
@@ -1880,15 +2060,15 @@ mod tests {
 
         let bot = db.create_bot("ArchiveBot", "", None).await.unwrap();
         let v = db.create_bot_version(bot.id, "code").await.unwrap();
-        assert!(!v.is_archived);
+        assert_eq!(v.is_archived, 0);
 
         db.archive_version(v.id, true).await.unwrap();
         let archived = db.get_bot_version_by_id(v.id).await.unwrap().unwrap();
-        assert!(archived.is_archived);
+        assert_eq!(archived.is_archived, 1);
 
         db.archive_version(v.id, false).await.unwrap();
         let unarchived = db.get_bot_version_by_id(v.id).await.unwrap().unwrap();
-        assert!(!unarchived.is_archived);
+        assert_eq!(unarchived.is_archived, 0);
     }
 
     #[tokio::test]

@@ -17,6 +17,8 @@ services:
       - ./data/maps:/app/data/maps
     environment:
       - RUST_LOG=info
+      # Default: SQLite. To use PostgreSQL, change to:
+      # DATABASE_URL=postgres://infon:infon@postgres:5432/infon
       - DATABASE_URL=sqlite:///app/data/infon.db?mode=rwc
     networks:
       - infon-net
@@ -43,11 +45,31 @@ services:
     networks:
       - infon-net
 
+  # Optional: PostgreSQL for production-like development.
+  # To use, change backend's DATABASE_URL to:
+  #   postgres://infon:infon@postgres:5432/infon
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: infon
+      POSTGRES_PASSWORD: infon
+      POSTGRES_DB: infon
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - infon-net
+    profiles:
+      - postgres
+
 volumes:
   # Named volume for Rust target dir -- avoids slow rebuilds from scratch
   backend-target:
   # Named volume for SQLite database persistence
   sqlite-data:
+  # Named volume for PostgreSQL data persistence
+  postgres-data:
 
 networks:
   infon-net:

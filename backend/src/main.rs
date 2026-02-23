@@ -31,8 +31,17 @@ async fn health_check() -> Json<Value> {
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    // DATABASE_URL supports both sqlite:// and postgres:// connection strings.
+    // Examples:
+    //   sqlite:infon.db?mode=rwc          (SQLite, default)
+    //   sqlite::memory:                    (SQLite in-memory, for tests)
+    //   postgres://user:pass@host/dbname   (PostgreSQL)
     let db_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:infon.db?mode=rwc".to_string());
+
+    // Install Any driver support for both SQLite and PostgreSQL.
+    sqlx::any::install_default_drivers();
+
     let db = db::Database::new(&db_url)
         .await
         .expect("Failed to initialize database");
