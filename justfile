@@ -86,6 +86,28 @@ build: build-backend build-frontend
 status:
     docker compose ps
 
+# ---------- Production image & local play ----------
+
+# Build the production Docker image
+build-image:
+    docker build -t infon:latest .
+
+# Run locally with the production image (local mode, no auth)
+local-run:
+    docker compose -f docker-compose.local.yml up --build -d
+
+# Stop the local instance
+local-stop:
+    docker compose -f docker-compose.local.yml down
+
+# Stop local instance and remove data volume
+local-clean:
+    docker compose -f docker-compose.local.yml down -v
+
+# View local instance logs
+local-logs:
+    docker compose -f docker-compose.local.yml logs -f
+
 # ---------- Local development (no Docker) ----------
 # Uses --manifest-path and --prefix to avoid shell-specific `cd &&` patterns.
 

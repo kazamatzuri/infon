@@ -165,8 +165,8 @@ pub fn router(
     game_server: Arc<GameServer>,
     rate_limiter: RateLimiter,
     game_queue: GameQueue,
+    maps_dir: PathBuf,
 ) -> Router {
-    let maps_dir = PathBuf::from("../data/maps");
     let state = AppState {
         db,
         game_server,

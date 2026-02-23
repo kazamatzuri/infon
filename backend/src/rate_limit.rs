@@ -83,11 +83,15 @@ impl RateLimiter {
     /// Check if the user is within the rate limit for the given type.
     /// If within limits, records the event and returns Ok(()).
     /// If exceeded, returns Err(RateLimitError).
+    /// In local mode, rate limiting is always bypassed.
     pub fn check_limit(
         &self,
         user_id: i64,
         limit_type: RateLimitType,
     ) -> Result<(), RateLimitError> {
+        if crate::config::is_local_mode() {
+            return Ok(());
+        }
         let mut map = self.inner.lock().unwrap();
         let key = (user_id, limit_type);
         let window = limit_type.window();
