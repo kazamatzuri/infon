@@ -5,8 +5,8 @@ import type { editor as monacoEditor } from 'monaco-editor';
 import { api } from '../api/client';
 import type { Bot, BotVersion } from '../api/client';
 
-const DEFAULT_CODE = `-- Your Infon bot
--- API: oo (Object-Oriented)
+const DEFAULT_CODE = `-- Your Infon bot (high-level API, coroutine style)
+-- See Docs for the state machine style alternative
 
 function Creature:onSpawned()
     -- Called when creature is created

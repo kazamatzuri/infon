@@ -34,9 +34,10 @@ Bearer token (JWT from /api/auth/login or API key from /api/api-keys)
 - POST /api/feedback - Submit feedback
 
 ## Bot Programming
-Bots are written in Lua 5.1. Two API styles are supported:
-- Object-oriented (oo): Define `Creature:main()` as a coroutine
-- State machine (state): Define `bot()` with state functions
+Bots are written in Lua 5.1. The low-level API exposes C functions directly (set_path, get_pos, etc.).
+Two high-level API styles wrap the low-level API (auto-detected from your code):
+- Coroutine style (oo.lua): Define `Creature:main()` with blocking methods
+- State machine style (state.lua): Define `bot()` with state functions and event handlers
 
 See /api/docs/lua-api for the full API reference.
 
@@ -421,7 +422,7 @@ CREATURE_SPAWNED=0  CREATURE_KILLED=1  CREATURE_ATTACKED=2  PLAYER_CREATED=3
 - get_cpu_usage() -> 0-100
 - print(msg)
 
-### Object-Oriented API (oo.lua)
+### High-Level API: Coroutine Style (oo.lua)
 
 Entry point: `function Creature:main() ... end`
 
@@ -435,7 +436,7 @@ Entry point: `function Creature:main() ... end`
 
 **Callbacks:** Creature:onSpawned(parent_id), Creature:onKilled(killer_id), Creature:onAttacked(attacker_id)
 
-### State Machine API (state.lua)
+### High-Level API: State Machine Style (state.lua)
 
 Entry point: `function bot() ... end`
 
@@ -447,7 +448,7 @@ Entry point: `function bot() ... end`
 
 **Events:** onSpawned(parent_id), onKilled(killer_id), onIdle(), onTileFood(), onLowHealth(), onTick()
 
-### Example Bot (OO)
+### Example Bot (Coroutine Style)
 ```lua
 function Creature:main()
     while true do

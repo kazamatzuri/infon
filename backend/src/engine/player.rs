@@ -3,6 +3,15 @@ use mlua::Lua;
 use super::config::LUA_MAX_INSTRUCTIONS;
 use super::lua_api;
 
+/// Which high-level API style the bot uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApiStyle {
+    /// Coroutine-based: `Creature:main()`, blocking methods like `self:moveto()`.
+    Oo,
+    /// State-machine-based: `bot()` with state functions and event handlers.
+    State,
+}
+
 /// Represents a player controlling a swarm of creatures.
 pub struct Player {
     pub id: u32,
@@ -16,9 +25,9 @@ pub struct Player {
 
 impl Player {
     /// Create a new player with a fresh Lua VM.
-    /// Registers all API functions and constants, loads the OO API.
-    /// Bot code is NOT loaded here — call `load_code()` after setting game state
-    /// so that top-level bot code can call API functions like `world_size()`.
+    /// Registers all API functions, constants, and bootstrap code.
+    /// The high-level API (oo.lua or state.lua) is NOT loaded here — it is
+    /// auto-detected and loaded in `load_code()` based on the bot source.
     pub fn new(id: u32, name: &str) -> Result<Self, String> {
         // SAFETY: We need the debug library for debug.sethook to set instruction
         // limits on coroutine threads. The debug global is removed in the bootstrap
@@ -59,9 +68,15 @@ creature_config = setmetatable({{}}, {{
     end
 }})
 
--- needs_api function (only "oo" is supported)
+-- Empty Creature table for OO-style bots to define methods on.
+-- The full Creature class methods are loaded later by oo.lua.
+Creature = {{}}
+
+-- needs_api: accepted for backward compatibility but API loading
+-- is handled automatically by the engine. Both "oo" and "state" are valid.
 function needs_api(needed)
-    assert(needed == "oo", "The '" .. needed .. "' API is not supported. Only the 'oo' API is available.")
+    assert(needed == "oo" or needed == "state",
+           "Unknown API style '" .. tostring(needed) .. "'. Use 'oo' or 'state'.")
 end
 
 -- Switch print to client_print
@@ -133,20 +148,6 @@ collectgarbage = nil
             .exec()
             .map_err(|e| format!("Failed to load bootstrap: {e}"))?;
 
-        // Load the OO high-level API
-        let api_code = include_str!("../../../orig_game/api/oo.lua");
-        lua.load(api_code)
-            .set_name("api/oo.lua")
-            .exec()
-            .map_err(|e| format!("Failed to load OO API: {e}"))?;
-
-        // Load the OO default code
-        let default_code = include_str!("../../../orig_game/api/oo-default.lua");
-        lua.load(default_code)
-            .set_name("api/oo-default.lua")
-            .exec()
-            .map_err(|e| format!("Failed to load OO defaults: {e}"))?;
-
         Ok(Player {
             id,
             name: name.to_string(),
@@ -158,10 +159,81 @@ collectgarbage = nil
         })
     }
 
+    /// Detect which high-level API style the bot source uses.
+    ///
+    /// Detection rules (checked against the source text):
+    /// 1. Explicit `needs_api("state")` or `needs_api('state')` → State
+    /// 2. `function bot()` defined → State
+    /// 3. Everything else (including `needs_api("oo")`) → OO (default)
+    fn detect_api_style(code: &str) -> ApiStyle {
+        // Check for explicit needs_api("state") / needs_api('state')
+        if code.contains("needs_api(\"state\")")
+            || code.contains("needs_api('state')")
+            || code.contains("needs_api \"state\"")
+            || code.contains("needs_api 'state'")
+        {
+            return ApiStyle::State;
+        }
+
+        // Check for function bot() pattern (state-machine style entry point)
+        if code.contains("function bot()")
+            || code.contains("function bot ()")
+        {
+            return ApiStyle::State;
+        }
+
+        ApiStyle::Oo
+    }
+
+    /// Load the appropriate high-level API files into the Lua VM.
+    fn load_api(&self, style: ApiStyle) -> Result<(), String> {
+        match style {
+            ApiStyle::Oo => {
+                let api_code = include_str!("../../../orig_game/api/oo.lua");
+                self.lua
+                    .load(api_code)
+                    .set_name("api/oo.lua")
+                    .exec()
+                    .map_err(|e| format!("Failed to load high-level API (oo.lua): {e}"))?;
+
+                let default_code = include_str!("../../../orig_game/api/oo-default.lua");
+                self.lua
+                    .load(default_code)
+                    .set_name("api/oo-default.lua")
+                    .exec()
+                    .map_err(|e| format!("Failed to load high-level API defaults (oo-default.lua): {e}"))?;
+            }
+            ApiStyle::State => {
+                let api_code = include_str!("../../../orig_game/api/state.lua");
+                self.lua
+                    .load(api_code)
+                    .set_name("api/state.lua")
+                    .exec()
+                    .map_err(|e| format!("Failed to load high-level API (state.lua): {e}"))?;
+
+                let default_code = include_str!("../../../orig_game/api/state-default.lua");
+                self.lua
+                    .load(default_code)
+                    .set_name("api/state-default.lua")
+                    .exec()
+                    .map_err(|e| format!("Failed to load high-level API defaults (state-default.lua): {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Load user bot code into the Lua VM.
+    /// Auto-detects whether the bot uses the OO or State high-level API style,
+    /// loads the appropriate API wrapper, then executes the user's bot code.
     /// Game state must be set in app_data before calling this, so top-level
     /// bot code (e.g. `world_size()` calls) can access the game world.
     pub fn load_code(&self, code: &str) -> Result<(), String> {
+        let style = Self::detect_api_style(code);
+
+        // Load the high-level API + defaults BEFORE user code, so that
+        // user code can override default callbacks (Creature:main, bot(), etc.)
+        self.load_api(style)?;
+
         if !code.is_empty() {
             self.lua
                 .load(code)
@@ -230,10 +302,43 @@ mod tests {
     }
 
     #[test]
-    fn test_player_think_exists() {
+    fn test_player_think_exists_after_oo_load() {
         let player = Player::new(1, "TestBot").unwrap();
-        let lua = &player.lua;
-        let _func: mlua::Function = lua.globals().get("player_think").unwrap();
-        // If we got here without error, the function exists and is a Function type
+        // player_think is defined by the high-level API, loaded in load_code()
+        player.load_code("function Creature:main() end").unwrap();
+        let _func: mlua::Function = player.lua.globals().get("player_think").unwrap();
+    }
+
+    #[test]
+    fn test_player_think_exists_after_state_load() {
+        let player = Player::new(1, "TestBot").unwrap();
+        player.load_code("function bot() function onIdle() end end").unwrap();
+        let _func: mlua::Function = player.lua.globals().get("player_think").unwrap();
+    }
+
+    #[test]
+    fn test_detect_oo_style() {
+        assert_eq!(Player::detect_api_style("function Creature:main() end"), ApiStyle::Oo);
+        assert_eq!(Player::detect_api_style("needs_api(\"oo\")\nfunction Creature:main() end"), ApiStyle::Oo);
+        assert_eq!(Player::detect_api_style(""), ApiStyle::Oo);
+    }
+
+    #[test]
+    fn test_detect_state_style() {
+        assert_eq!(Player::detect_api_style("function bot()\n  function onIdle() end\nend"), ApiStyle::State);
+        assert_eq!(Player::detect_api_style("needs_api(\"state\")\nfunction bot() end"), ApiStyle::State);
+        assert_eq!(Player::detect_api_style("needs_api('state')\nfunction bot() end"), ApiStyle::State);
+        assert_eq!(Player::detect_api_style("needs_api \"state\"\nfunction bot() end"), ApiStyle::State);
+    }
+
+    #[test]
+    fn test_needs_api_accepts_both_styles() {
+        let player = Player::new(1, "TestBot").unwrap();
+        // needs_api("oo") should not error
+        player.load_code("needs_api(\"oo\")\nfunction Creature:main() end").unwrap();
+
+        let player2 = Player::new(2, "TestBot2").unwrap();
+        // needs_api("state") should not error
+        player2.load_code("needs_api(\"state\")\nfunction bot() function onIdle() end end").unwrap();
     }
 }

@@ -28,7 +28,7 @@ fn create_test_world() -> World {
     world
 }
 
-// ---- OO API bots ----
+// ---- Coroutine-style (oo.lua) bots ----
 
 #[test]
 fn test_stupibot_loads() {

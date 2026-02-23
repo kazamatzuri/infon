@@ -10,12 +10,13 @@ test.describe('Navigation & Layout', () => {
     // Public nav links visible
     await expect(nav.getByRole('link', { name: 'Leaderboard' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Tournaments' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Games' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Docs' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'About' })).toBeVisible();
 
     // Auth-only nav links NOT visible
     await expect(nav.getByRole('link', { name: 'Bot Library' })).not.toBeVisible();
     await expect(nav.getByRole('link', { name: 'Editor' })).not.toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Game' })).not.toBeVisible();
   });
 
   test('unauthenticated user sees Login/Register links', async ({ page }) => {

@@ -116,11 +116,30 @@ export function About() {
         border: '1px solid #1a3a5c',
       }}>
         <h3 style={{ color: '#16c79a', marginTop: 0, marginBottom: 12 }}>License</h3>
-        <p style={{ color: '#ccc', lineHeight: 1.7, margin: 0 }}>
+        <p style={{ color: '#ccc', lineHeight: 1.7, margin: '0 0 16px 0' }}>
           Infon Battle Arena is open-source software released under the{' '}
           <strong style={{ color: '#e0e0e0' }}>GNU General Public License (GPL)</strong>,
           matching the license of the original game.
         </p>
+        <a
+          href="https://github.com/kazamatzuri/infon"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'inline-block',
+            color: '#f5a623',
+            textDecoration: 'none',
+            padding: '8px 16px',
+            border: '1px solid #f5a623',
+            borderRadius: 6,
+            fontSize: 14,
+            transition: 'background 0.2s',
+          }}
+          onMouseOver={e => (e.currentTarget.style.background = 'rgba(245,166,35,0.1)')}
+          onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
+        >
+          View Source on GitHub
+        </a>
       </section>
     </div>
   );

@@ -91,9 +91,9 @@ player_number   -- Your player ID
 
 ---
 
-## Object-Oriented API (oo.lua)
+## High-Level API: Coroutine Style (oo.lua)
 
-The OO API wraps low-level functions into a `Creature` class. Each creature runs `Creature:main()` as a coroutine.
+This high-level API wraps low-level functions into a `Creature` class. Each creature runs `Creature:main()` as a coroutine. This is the default style if no `needs_api()` call is present.
 
 ### Entry Point
 
@@ -172,9 +172,9 @@ end
 
 ---
 
-## State Machine API (state.lua)
+## High-Level API: State Machine Style (state.lua)
 
-The State API uses a state-machine pattern where the bot function defines states as nested functions.
+This high-level API uses a state-machine pattern where the bot function defines states as nested functions. Detected automatically when your code defines `function bot()` or calls `needs_api("state")`.
 
 ### Entry Point
 
@@ -230,14 +230,14 @@ end
 
 ## Example Bots
 
-### Minimal (OO API)
+### Minimal (Coroutine Style)
 ```lua
 function Creature:main()
     self:screen_message("Hi!")
 end
 ```
 
-### Random Walker (OO API)
+### Random Walker (Coroutine Style)
 ```lua
 function Creature:main()
     while true do
@@ -247,7 +247,7 @@ function Creature:main()
 end
 ```
 
-### Eat and Grow (OO API)
+### Eat and Grow (Coroutine Style)
 ```lua
 function Creature:main()
     while true do
@@ -267,7 +267,7 @@ function Creature:main()
 end
 ```
 
-### Simple State Bot (State API)
+### Simple State Bot (State Machine Style)
 ```lua
 function bot()
     function onIdle()

@@ -215,7 +215,7 @@ function GettingStarted() {
           <div>
             <strong style={{ color: '#e0e0e0' }}>Write Your Code</strong>
             <p style={{ ...textStyle, marginTop: 4 }}>
-              Open the Editor and write Lua code. The simplest bot uses the Object-Oriented API:
+              Open the Editor and write Lua code. The simplest bot uses the coroutine-style high-level API:
             </p>
             <CodeBlock>{`function Creature:main()
     while true do
@@ -252,14 +252,16 @@ end`}</CodeBlock>
         </div>
       </Card>
 
-      <Card title="Two API Styles">
+      <Card title="Two High-Level API Styles">
         <p style={textStyle}>
-          Infon supports two Lua API styles. Pick whichever feels more natural:
+          The low-level API exposes engine functions directly (set_path, get_pos, etc.).
+          On top of that, two high-level API styles wrap these into more convenient patterns.
+          The engine auto-detects which style your bot uses -- just pick whichever feels natural:
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <div>
             <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 8, fontSize: 14 }}>
-              Object-Oriented (OO)
+              Coroutine Style (oo.lua)
             </h4>
             <p style={{ ...textStyle, fontSize: 13 }}>
               Define <code style={{ color: '#16c79a' }}>Creature:main()</code> as a coroutine.
@@ -269,7 +271,7 @@ end`}</CodeBlock>
           </div>
           <div>
             <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 8, fontSize: 14 }}>
-              State Machine
+              State Machine Style (state.lua)
             </h4>
             <p style={{ ...textStyle, fontSize: 13 }}>
               Define <code style={{ color: '#16c79a' }}>bot()</code> with state functions and
@@ -598,9 +600,10 @@ function FAQ() {
       q: 'I get a Lua error "attempt to call a nil value"',
       a: (
         <p style={textStyle}>
-          This usually means you misspelled a function name, or you are using the State API functions
-          (like <code style={{ color: '#16c79a' }}>eat()</code>) in an OO-style bot. In the OO API,
-          use <code style={{ color: '#16c79a' }}>self:eat()</code>. Check the API Reference for the correct function names.
+          This usually means you misspelled a function name, or you are mixing API styles.
+          In coroutine-style bots (oo.lua), use <code style={{ color: '#16c79a' }}>self:eat()</code>.
+          In state-machine-style bots (state.lua), use <code style={{ color: '#16c79a' }}>eat()</code> directly.
+          Check the API Reference for the correct function names.
         </p>
       ),
     },
@@ -626,13 +629,14 @@ function FAQ() {
       ),
     },
     {
-      q: 'What\'s the difference between the OO and State API?',
+      q: 'What\'s the difference between the two high-level API styles?',
       a: (
         <p style={textStyle}>
-          Both achieve the same thing. The OO API uses <code style={{ color: '#16c79a' }}>Creature:main()</code> as
-          a coroutine with blocking methods (moveto, eat, etc.). The State API uses{' '}
+          Both are wrappers around the same low-level API. The coroutine style (oo.lua)
+          uses <code style={{ color: '#16c79a' }}>Creature:main()</code> with
+          blocking methods (moveto, eat, etc.). The state machine style (state.lua) uses{' '}
           <code style={{ color: '#16c79a' }}>bot()</code> with named state functions and event callbacks.
-          Choose whichever feels more natural to you.
+          The engine auto-detects which style your code uses -- no configuration needed.
         </p>
       ),
     },

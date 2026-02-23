@@ -479,13 +479,6 @@ The initial target is **20 players** per public game. This is already visually i
 - Viewport-based streaming (only send creatures visible to the viewer's viewport)
 - Reduce update frequency for distant creatures
 
-### 9.4 Future: 50-100 Player Games
-
-If 20-player games prove popular and the engine handles them well, consider:
-- Scaling to 50, then 100 players
-- Alternative scoring mode for large games (survival-based rather than KotH)
-- Multiple quality tiers for spectators (full detail for 10 viewers, summary for 100+)
-- More aggressive per-bot CPU limits to fit more players per tick
 
 ---
 
