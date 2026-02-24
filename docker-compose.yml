@@ -13,13 +13,13 @@ services:
       - ./orig_game:/app/orig_game
       - ./docs:/app/docs
       - backend-target:/app/backend/target
-      - sqlite-data:/app/data
       - ./data/maps:/app/data/maps
     environment:
       - RUST_LOG=info
-      # Default: SQLite. To use PostgreSQL, change to:
-      # DATABASE_URL=postgres://infon:infon@postgres:5432/infon
-      - DATABASE_URL=sqlite:///app/data/infon.db?mode=rwc
+      - DATABASE_URL=postgres://infon:infon@postgres:5432/infon
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - infon-net
 
@@ -62,14 +62,14 @@ services:
       - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
     networks:
       - infon-net
 
-  # Optional: PostgreSQL for production-like development.
-  # To use, change backend's DATABASE_URL to:
-  #   postgres://infon:infon@postgres:5432/infon
   postgres:
     image: postgres:16-alpine
     ports:
@@ -82,14 +82,15 @@ services:
       - postgres-data:/var/lib/postgresql/data
     networks:
       - infon-net
-    profiles:
-      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infon"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
 volumes:
   # Named volume for Rust target dir -- avoids slow rebuilds from scratch
   backend-target:
-  # Named volume for SQLite database persistence
-  sqlite-data:
   # Named volume for PostgreSQL data persistence
   postgres-data:
 

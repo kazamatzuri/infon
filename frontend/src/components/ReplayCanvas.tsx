@@ -350,24 +350,32 @@ export function ReplayCanvas({ messages }: ReplayCanvasProps) {
           ) : (
             [...players]
               .sort((a, b) => b.score - a.score)
-              .map(p => (
-                <div key={p.id} style={{
-                  padding: '8px', marginBottom: '8px', background: '#0a0a1a', borderRadius: '6px',
-                  borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{
-                      display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
-                      background: PLAYER_COLORS[p.id % PLAYER_COLORS.length],
-                    }} />
-                    <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+              .map(p => {
+                const dead = p.num_creatures === 0;
+                const playerColor = PLAYER_COLORS[p.id % PLAYER_COLORS.length];
+                return (
+                  <div key={p.id} style={{
+                    padding: '8px', marginBottom: '8px', background: '#0a0a1a', borderRadius: '6px',
+                    borderLeft: `3px solid ${dead ? '#444' : playerColor}`,
+                    opacity: dead ? 0.5 : 1,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{
+                        display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
+                        background: dead ? '#444' : playerColor,
+                      }} />
+                      <span style={{ color: dead ? '#666' : '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+                      {dead && <span style={{ fontSize: '13px', marginLeft: '2px' }} title="Eliminated">&#x1F480;</span>}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                      <span style={{ color: dead ? '#555' : '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
+                      <span style={{ color: dead ? '#555' : '#888', fontSize: '13px' }}>
+                        {dead ? 'Eliminated' : `${p.num_creatures} units`}
+                      </span>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                    <span style={{ color: '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
-                    <span style={{ color: '#888', fontSize: '13px' }}>{p.num_creatures} units</span>
-                  </div>
-                </div>
-              ))
+                );
+              })
           )}
         </div>
       </div>
