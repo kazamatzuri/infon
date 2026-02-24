@@ -689,67 +689,165 @@ function StrategyGuide() {
     <>
       <SectionTitle>Strategy Guide</SectionTitle>
 
-      <Card title="Creature Types">
+      <Card title="Creature Type Stats">
         <p style={textStyle}>
-          Understanding the three creature types is fundamental to success:
+          Understanding the exact stats is essential. All values below are from the engine source code.
         </p>
-        <div style={{ marginBottom: 16 }}>
-          <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 4, fontSize: 14 }}>
-            Type 0 - Small (Balanced)
-          </h4>
-          <p style={{ ...textStyle, fontSize: 13 }}>
-            Your starting type. Fast enough, decent food capacity (10,000). Can only attack Flyers.
-            Convert to Big when you have enough food (8,000) to start spawning, or to Flyer (5,000)
-            for scouting.
-          </p>
+        <div style={{ overflowX: 'auto', margin: '12px 0' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={apiThStyle}>Stat</th>
+                <th style={apiThStyle}>Small (Type 0)</th>
+                <th style={apiThStyle}>Big (Type 1)</th>
+                <th style={apiThStyle}>Flyer (Type 2)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['Max Health', '10,000', '20,000', '5,000'],
+                ['Max Food', '10,000', '20,000', '5,000'],
+                ['Base Speed', '200 px/s', '400 px/s', '800 px/s'],
+                ['Speed Bonus', '+625 × health/max', 'None', 'None'],
+                ['Health Drain', '50/s (5/tick)', '70/s (7/tick)', '50/s (5/tick)'],
+                ['Heal Rate', '500 HP/s', '300 HP/s', '600 HP/s'],
+                ['Eat Rate', '800 food/s', '400 food/s', '600 food/s'],
+                ['Can Spawn', 'No', 'Yes (Type 0)', 'No'],
+                ['Can Feed', 'Yes (256 px range)', 'No', 'Yes (256 px range)'],
+                ['Feed Speed', '400 food/s', '--', '400 food/s'],
+                ['Flies Over Walls', 'No', 'No', 'Yes'],
+              ].map(([stat, small, big, flyer]) => (
+                <tr key={stat}>
+                  <td style={{ ...apiTdStyle, fontWeight: 600 }}>{stat}</td>
+                  <td style={apiTdStyle}>{small}</td>
+                  <td style={apiTdStyle}>{big}</td>
+                  <td style={apiTdStyle}>{flyer}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div style={{ marginBottom: 16 }}>
-          <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 4, fontSize: 14 }}>
-            Type 1 - Big (Tank)
-          </h4>
-          <p style={{ ...textStyle, fontSize: 13 }}>
-            The only type that can spawn new creatures (Type 0). High HP (20,000) and attacks
-            everything for 1,500 damage. Essential for growing your swarm. Costs 5,000 food + 20% HP to spawn.
-          </p>
-        </div>
-        <div>
-          <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 4, fontSize: 14 }}>
-            Type 2 - Flyer (Scout)
-          </h4>
-          <p style={{ ...textStyle, fontSize: 13 }}>
-            Fastest type (800 units/sec) and can fly over walls. Cannot attack at all.
-            Great for scouting food and feeding other creatures. Vulnerable to Small attacks.
-          </p>
-        </div>
+        <p style={{ ...textStyle, fontSize: 13 }}>
+          Small creatures get a unique speed bonus based on current health: their effective speed is{' '}
+          <code style={{ color: '#16c79a' }}>200 + 625 × (current_health / max_health)</code>, up to a
+          max of 1,000 px/s. At full health a Small moves at 825 px/s -- nearly as fast as a Flyer.
+        </p>
       </Card>
 
-      <Card title="Food Management">
+      <Card title="Combat Mechanics">
+        <p style={textStyle}>
+          Combat uses continuous DPS (damage per second). While a creature is in the ATTACK state and
+          its target is within range, damage is applied every tick (100ms) as{' '}
+          <code style={{ color: '#16c79a' }}>damage_per_sec × tick_delta / 1000</code>.
+          Range is checked each tick using Euclidean (straight-line) distance in pixels.
+          If the target moves out of range or dies, the attacker goes IDLE.
+        </p>
+
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Damage Table (DPS by attacker vs target type)
+        </h4>
+        <div style={{ overflowX: 'auto', margin: '12px 0' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={apiThStyle}>Attacker</th>
+                <th style={apiThStyle}>vs Small</th>
+                <th style={apiThStyle}>vs Big</th>
+                <th style={apiThStyle}>vs Flyer</th>
+                <th style={apiThStyle}>Range (px)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ ...apiTdStyle, fontWeight: 600 }}>Small</td>
+                <td style={{ ...apiTdStyle, color: '#888' }}>0 (can't)</td>
+                <td style={{ ...apiTdStyle, color: '#888' }}>0 (can't)</td>
+                <td style={{ ...apiTdStyle, color: '#4caf50' }}>1,000/s</td>
+                <td style={apiTdStyle}>768</td>
+              </tr>
+              <tr>
+                <td style={{ ...apiTdStyle, fontWeight: 600 }}>Big</td>
+                <td style={{ ...apiTdStyle, color: '#4caf50' }}>1,500/s</td>
+                <td style={{ ...apiTdStyle, color: '#4caf50' }}>1,500/s</td>
+                <td style={{ ...apiTdStyle, color: '#4caf50' }}>1,500/s</td>
+                <td style={apiTdStyle}>512</td>
+              </tr>
+              <tr>
+                <td style={{ ...apiTdStyle, fontWeight: 600 }}>Flyer</td>
+                <td style={{ ...apiTdStyle, color: '#888' }}>0 (can't)</td>
+                <td style={{ ...apiTdStyle, color: '#888' }}>0 (can't)</td>
+                <td style={{ ...apiTdStyle, color: '#888' }}>0 (can't)</td>
+                <td style={{ ...apiTdStyle, color: '#888' }}>--</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style={{ ...textStyle, fontSize: 13 }}>
+          At 1,500 DPS, a Big kills another full-health Big (20,000 HP) in ~13.3 seconds.
+          A Big kills a Small (10,000 HP) in ~6.7 seconds. A Small kills a Flyer (5,000 HP) in 5 seconds.
+        </p>
+      </Card>
+
+      <Card title="Conversion & Spawning Costs">
+        <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 8, fontSize: 14 }}>
+          Conversion (food cost, consumed at 1,000 food/s)
+        </h4>
+        <ul style={{ color: '#ccc', lineHeight: 2, paddingLeft: 20, margin: '0 0 16px 0' }}>
+          <li>Small to Big: <strong style={{ color: '#e0e0e0' }}>8,000 food</strong></li>
+          <li>Small to Flyer: <strong style={{ color: '#e0e0e0' }}>5,000 food</strong></li>
+          <li>Big to Small: <strong style={{ color: '#e0e0e0' }}>8,000 food</strong></li>
+          <li>Flyer to Small: <strong style={{ color: '#e0e0e0' }}>5,000 food</strong></li>
+          <li>Big to Flyer / Flyer to Big: <strong style={{ color: '#e94560' }}>not allowed</strong></li>
+        </ul>
+
+        <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 8, fontSize: 14 }}>
+          Spawning (Big only)
+        </h4>
         <ul style={{ color: '#ccc', lineHeight: 2, paddingLeft: 20, margin: 0 }}>
-          <li>Always prioritize eating when food is on your tile -- do not waste it.</li>
-          <li>Heal before eating if health is low; dead creatures eat nothing.</li>
-          <li>Creatures drain health constantly. Without eating, they starve and die.</li>
-          <li>Use Flyers to scout for food-rich areas, then send Smalls to eat.</li>
-          <li>Feed struggling allies using the FEED action (max 256 unit range, 400 food/sec).</li>
+          <li>Food cost: <strong style={{ color: '#e0e0e0' }}>5,000</strong> (consumed at 2,000 food/s)</li>
+          <li>Health cost: <strong style={{ color: '#e0e0e0' }}>4,000 HP</strong> (deducted at spawn start)</li>
+          <li>Offspring type: Small (Type 0)</li>
         </ul>
       </Card>
 
-      <Card title="Attacking vs Defending">
+      <Card title="Food & Tile Economy">
+        <p style={textStyle}>
+          Food spawns on tiles from map-defined spawner points. Food does not grow continuously --
+          each spawner periodically places a chunk of food on a random tile within its radius.
+        </p>
         <ul style={{ color: '#ccc', lineHeight: 2, paddingLeft: 20, margin: 0 }}>
-          <li>Only Big creatures can attack ground units. Convert to Big before engaging.</li>
-          <li>Small creatures are only useful against Flyers (1,000 damage in 768 range).</li>
-          <li>
-            Big vs Big fights are symmetrical (1,500 dmg each). Win by having more food/health going in.
-          </li>
-          <li>Avoid fights when low on food -- you need food to heal afterward.</li>
-          <li>King of the Hill requires IDLE state. Guard your king with nearby Bigs.</li>
+          <li>Max food per tile: <strong style={{ color: '#e0e0e0' }}>9,999</strong></li>
+          <li>Initial food at each spawner: <strong style={{ color: '#e0e0e0' }}>9,000</strong></li>
+          <li>Respawn interval: map-dependent (typically 3,000-5,000ms per spawner)</li>
+          <li>Respawn amount: map-dependent (typically 800 food per spawn event for generated maps)</li>
+          <li>Food appears at a random tile within the spawner's radius (2-4 tiles)</li>
+          <li>Food is a finite, contested resource. Eating rates vary by type: Small eats fastest (800/s),
+            Flyer moderate (600/s), Big slowest (400/s).</li>
         </ul>
+      </Card>
+
+      <Card title="CPU Limits">
+        <p style={textStyle}>
+          Each player's Lua code is limited to <strong style={{ color: '#e0e0e0' }}>500,000 VM instructions per tick</strong>.
+          If your bot exceeds this limit:
+        </p>
+        <ul style={{ color: '#ccc', lineHeight: 2, paddingLeft: 20, margin: 0 }}>
+          <li>The current tick's <code style={{ color: '#16c79a' }}>player_think()</code> call is aborted.</li>
+          <li>An error message <code style={{ color: '#16c79a' }}>"lua vm cycles exceeded"</code> is logged to your console output.</li>
+          <li>No creature actions are executed for that tick.</li>
+          <li>Your creatures are <strong style={{ color: '#e0e0e0' }}>not killed</strong> and your bot is <strong style={{ color: '#e0e0e0' }}>not kicked</strong> -- the game continues normally next tick.</li>
+        </ul>
+        <p style={{ ...textStyle, fontSize: 13, marginTop: 8 }}>
+          Note: <code style={{ color: '#16c79a' }}>get_cpu_usage()</code> currently returns 0 (stub).
+          To stay within limits, avoid expensive operations in tight loops and minimize per-tick computation.
+        </p>
       </Card>
 
       <Card title="Growth Strategy">
         <ol style={{ color: '#ccc', lineHeight: 2, paddingLeft: 20, margin: 0 }}>
-          <li>Start by eating food as Small creatures to build reserves.</li>
-          <li>Convert to Big (8,000 food) when you have enough.</li>
-          <li>Spawn new Smalls from your Big (costs 5,000 food + 20% HP).</li>
+          <li>Start by eating food as Small creatures to build reserves (800 food/s eat rate).</li>
+          <li>Convert to Big (8,000 food, takes 8 seconds at 1,000/s conversion speed).</li>
+          <li>Spawn new Smalls from your Big (5,000 food + 4,000 HP cost).</li>
           <li>New Smalls repeat the cycle: eat, convert, spawn.</li>
           <li>Exponential growth is the key to domination.</li>
         </ol>

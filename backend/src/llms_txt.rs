@@ -7,13 +7,10 @@ pub const LLMS_TXT: &str = r#"# Infon Battle Arena API
 /api/
 
 ## Authentication
-Bearer token via Authorization header. Supports both JWT tokens (from /api/auth/login) and API keys (from /api/api-keys).
-API keys use the same header format: `Authorization: Bearer infon_...`
+API keys via Authorization header: `Authorization: Bearer infon_<key>`
+Create keys in the web UI at /api-keys or via POST /api/api-keys.
 
 ## Key Endpoints
-- POST /api/auth/register - Create account
-- POST /api/auth/login - Get JWT token
-- GET /api/auth/me - Get current user info
 - GET/POST /api/bots - List/create bots
 - GET/PUT/DELETE /api/bots/{id} - Get/update/delete bot
 - GET/POST /api/bots/{id}/versions - List/create bot versions
@@ -37,17 +34,14 @@ API keys use the same header format: `Authorization: Bearer infon_...`
 - GET/POST /api/teams - List/create teams
 - GET/POST /api/api-keys - List/create API keys
 - DELETE /api/api-keys/{id} - Revoke API key
-- GET /api/notifications - User notifications (auth required)
-- POST /api/notifications/{id}/read - Mark notification read
 - POST /api/validate-lua - Validate Lua syntax
 - GET /api/docs/lua-api - Lua API reference (Markdown)
 - GET /api/maps - List available maps
-- POST /api/feedback - Submit feedback
 
-## API Key Authentication
+## API Key Scopes
 Create an API key via POST /api/api-keys with scopes like "bots:read,matches:write".
-Use it as: `Authorization: Bearer infon_<key>`
 Available scopes: bots:read, bots:write, matches:read, matches:write, teams:write, api_keys:write, leaderboard:read
+Default: bots:read,matches:read,leaderboard:read
 
 ## Bot Programming
 Bots are written in Lua 5.1. The low-level API exposes C functions directly (set_path, get_pos, etc.).
@@ -56,6 +50,11 @@ Two high-level API styles wrap the low-level API (auto-detected from your code):
 - State machine style (state.lua): Define `bot()` with state functions and event handlers
 
 See /api/docs/lua-api for the full API reference.
+
+## Documentation Links
+- Web docs (game mechanics, strategy, API auth guide): /docs
+- Lua API reference (Markdown): /api/docs/lua-api
+- Full LLM documentation: /llms-full.txt
 
 ## WebSocket
 - /ws/game - Live game state stream (JSON frames)
@@ -89,37 +88,13 @@ and each tick every creature's Lua coroutine is resumed to make decisions.
 
 ### Authentication
 
-All authenticated endpoints require a Bearer token in the Authorization header.
-Two token types are supported:
-
-1. **JWT tokens** - obtained from login, used by the web UI, expire after inactivity
-2. **API keys** - long-lived tokens for scripts/CI, created via /api/api-keys, prefixed with `infon_`
-
-Both use the same header format:
+All authenticated endpoints require an API key in the Authorization header:
 ```
-Authorization: Bearer <token>
+Authorization: Bearer infon_<key>
 ```
 
-**Register:**
-```
-POST /api/auth/register
-Content-Type: application/json
-{"username": "player1", "email": "player1@example.com", "password": "secret123"}
-```
-
-**Login:**
-```
-POST /api/auth/login
-Content-Type: application/json
-{"username": "player1", "password": "secret123"}
-Response: {"token": "jwt...", "user": {...}}
-```
-
-**Current User:**
-```
-GET /api/auth/me
-Authorization: Bearer <token>
-```
+API keys are created in the web UI at /api-keys or programmatically via POST /api/api-keys.
+For more details on authentication setup, see the web documentation at /docs (REST API & Auth section).
 
 ### API Keys
 
@@ -342,17 +317,6 @@ GET /api/teams/{id}/versions
 POST /api/teams/{id}/versions  {"bot_version_a": 1, "bot_version_b": 2}
 ```
 
-### Notifications
-
-```
-GET /api/notifications
-Authorization: Bearer <token>
-Response: {"notifications": [...], "unread_count": 3}
-
-POST /api/notifications/{id}/read
-Authorization: Bearer <token>
-```
-
 ### Maps
 
 ```
@@ -370,22 +334,19 @@ Content-Type: application/json
 Response: {"valid": true} or {"valid": false, "error": "..."}
 ```
 
-### Feedback
-
-```
-POST /api/feedback
-Content-Type: application/json
-{"category": "bug", "description": "Something went wrong"}
-Categories: bug, feature, general
-```
-
-### Documentation
+### Documentation & Further Reading
 
 ```
 GET /api/docs/lua-api  - Lua API reference (Markdown)
 GET /llms.txt          - LLM-friendly summary
 GET /llms-full.txt     - Complete LLM documentation (this file)
 ```
+
+**Web documentation** at /docs covers:
+- Getting Started guide for new players
+- Lua API reference with examples
+- Strategy Guide with creature stats, combat math, economy details
+- REST API & Auth guide with API key setup walkthrough
 
 ### WebSocket
 
@@ -405,51 +366,87 @@ Messages:
 ## Game Mechanics
 
 ### Game World
-- 2D tile-based grid (each tile 256x256 units)
+- 2D tile-based grid (each tile 256x256 units/pixels)
 - X increases rightward, Y increases downward
 - Tiles: TILE_SOLID (0, walls) or TILE_PLAIN (1, walkable)
-- Food spawns on tiles and can be consumed by creatures
+- Game runs in 100ms ticks (10 ticks per second)
 - world_size() returns playable boundaries as x1, y1, x2, y2
 
-### Creature Types
+### Creature Type Stats
 
-**Type 0 - Small (Balanced)**
-- Speed: 200-300 units/sec
-- Max Food: 10,000 | HP: 10,000
-- Attack: 768 range, vs Flyers only (1000 dmg)
-- Converts to Type 1 (8000 food) or Type 2 (5000 food)
+| Stat | Small (Type 0) | Big (Type 1) | Flyer (Type 2) |
+|------|---------------|-------------|----------------|
+| Max Health | 10,000 | 20,000 | 5,000 |
+| Max Food | 10,000 | 20,000 | 5,000 |
+| Base Speed | 200 px/s | 400 px/s | 800 px/s |
+| Speed Bonus | +625 × health/max_health | None | None |
+| Health Drain | 50/s (5/tick) | 70/s (7/tick) | 50/s (5/tick) |
+| Heal Rate | 500 HP/s (from food) | 300 HP/s | 600 HP/s |
+| Eat Rate | 800 food/s (from tile) | 400 food/s | 600 food/s |
+| Can Spawn | No | Yes (Type 0 offspring) | No |
+| Can Feed | Yes (256px, 400 food/s) | No | Yes (256px, 400 food/s) |
+| Flies Over Walls | No | No | Yes |
 
-**Type 1 - Big (Tank)**
-- Speed: 400 units/sec
-- Max Food: 20,000 | HP: 20,000
-- Attack: 512 range, all types (1500 dmg)
-- Spawns Type 0 (costs 5000 food + 20% health)
-- Converts to Type 0 (8000 food)
+Small creatures have a unique speed bonus: effective speed = 200 + 625 × (current_health / max_health).
+At full health a Small moves at 825 px/s, nearly as fast as a Flyer.
 
-**Type 2 - Flyer (Scout)**
-- Speed: 800 units/sec (fastest)
-- Max Food: 5,000 | HP: 5,000
-- Cannot attack
-- Can fly over water and walls
-- Converts to Type 0 (5000 food)
+### Combat System
 
-### Combat Damage Table
+Combat is continuous DPS. While in ATTACK state with target in range, damage is applied every tick:
+`damage = damage_per_sec × tick_delta_ms / 1000`
+Range is Euclidean distance in pixels. If target exits range or dies, attacker goes IDLE.
+
+**Damage Table (DPS / Range in pixels):**
 
 | Attacker | vs Small | vs Big | vs Flyer |
 |----------|----------|--------|----------|
-| Small    | 0        | 0      | 1000     |
-| Big      | 1500     | 1500   | 1500     |
-| Flyer    | -        | -      | -        |
+| Small | 0 / -- | 0 / -- | 1,000 DPS / 768px |
+| Big | 1,500 DPS / 512px | 1,500 DPS / 512px | 1,500 DPS / 512px |
+| Flyer | Cannot attack | Cannot attack | Cannot attack |
+
+Time-to-kill examples: Big vs Big (20,000 HP) = ~13.3s. Big vs Small (10,000 HP) = ~6.7s.
+Small vs Flyer (5,000 HP) = 5s.
+
+### Conversion Costs
+
+Food is consumed at 1,000 food/s during conversion:
+- Small → Big: 8,000 food (8s)
+- Small → Flyer: 5,000 food (5s)
+- Big → Small: 8,000 food (8s)
+- Flyer → Small: 5,000 food (5s)
+- Big ↔ Flyer: Not allowed (must go through Small)
+
+### Spawning (Big Only)
+
+- Food cost: 5,000 (consumed at 2,000 food/s)
+- Health cost: 4,000 HP (deducted immediately at spawn start)
+- Offspring type: Small (Type 0)
+
+### Food & Tile Economy
+
+- Max food per tile: 9,999
+- Initial food at each spawner: 9,000
+- Food spawners are map-defined points with radius, amount, and interval
+- Respawn: periodic (typically every 3,000-5,000ms), placing food on a random tile within spawner radius
+- Respawn amount: map-dependent (typically ~800 food per event for generated maps)
+- Food does NOT grow continuously; it appears in discrete chunks at interval boundaries
+
+### CPU Limits
+
+- Each player limited to 500,000 Lua VM instructions per tick
+- If exceeded: current tick's player_think() aborts, error logged to console output
+- Creatures are NOT killed. Bot is NOT kicked. Game continues normally next tick
+- get_cpu_usage() currently returns 0 (stub — no real-time tracking)
 
 ### Creature States
-- CREATURE_IDLE (0): Doing nothing; required for King of the Hill
+- CREATURE_IDLE (0): Doing nothing; required for King of the Hill scoring
 - CREATURE_WALK (1): Moving to destination
-- CREATURE_HEAL (2): Using food to restore health
-- CREATURE_EAT (3): Consuming food from tile
-- CREATURE_ATTACK (4): Attacking target
-- CREATURE_CONVERT (5): Changing type
-- CREATURE_SPAWN (6): Type 1 producing Type 0
-- CREATURE_FEED (7): Transferring food (max 256 units distance)
+- CREATURE_HEAL (2): Converting food to health (type-dependent rate)
+- CREATURE_EAT (3): Consuming food from tile (type-dependent rate)
+- CREATURE_ATTACK (4): Continuous DPS to target while in range
+- CREATURE_CONVERT (5): Changing type (consumes food at 1,000/s)
+- CREATURE_SPAWN (6): Type 1 producing Type 0 (consumes food at 2,000/s)
+- CREATURE_FEED (7): Transferring food to ally (Small/Flyer only, 256px range, 400 food/s)
 
 ### King of the Hill
 - Special tile on the map at a fixed position
