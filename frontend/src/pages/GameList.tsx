@@ -1,17 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { ActiveGameInfo } from '../api/client';
+import type { ActiveGameInfo, MatchDetail } from '../api/client';
 
-interface RecentMatch {
-  id: number;
-  format: string;
-  map: string;
-  status: string;
-  winner_bot_version_id: number | null;
-  created_at: string;
-  finished_at: string | null;
-}
+type MatchWithPlayers = MatchDetail['match'] & { players?: string[] };
+
+const PAGE_SIZE = 20;
 
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -31,11 +25,43 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
+function friendlyMap(map: string): string {
+  if (map === 'random') return 'Random Generated';
+  if (map === 'random_pool') return 'Random from Pool';
+  return map;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const colors: Record<string, { bg: string; fg: string }> = {
+    finished: { bg: '#16c79a22', fg: '#16c79a' },
+    running: { bg: '#f5a62322', fg: '#f5a623' },
+    pending: { bg: '#f5a62322', fg: '#f5a623' },
+    queued: { bg: '#f5a62322', fg: '#f5a623' },
+    abandoned: { bg: '#e9456022', fg: '#e94560' },
+  };
+  const c = colors[status] || colors.abandoned;
+  return (
+    <span style={{
+      background: c.bg,
+      color: c.fg,
+      padding: '2px 8px',
+      borderRadius: '10px',
+      fontSize: '11px',
+      fontWeight: 600,
+      textTransform: 'capitalize',
+    }}>
+      {status}
+    </span>
+  );
+}
+
 export function GameList() {
   const navigate = useNavigate();
   const [activeGames, setActiveGames] = useState<ActiveGameInfo[]>([]);
-  const [recentMatches, setRecentMatches] = useState<RecentMatch[]>([]);
+  const [recentMatches, setRecentMatches] = useState<MatchWithPlayers[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -43,16 +69,30 @@ export function GameList() {
       setError(null);
       const [active, recent] = await Promise.all([
         api.listActiveGames(),
-        api.listMatches(20),
+        api.listMatches(PAGE_SIZE, 0),
       ]);
       setActiveGames(active);
       setRecentMatches(recent);
+      setHasMore(recent.length === PAGE_SIZE);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load games');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const more = await api.listMatches(PAGE_SIZE, recentMatches.length);
+      setRecentMatches(prev => [...prev, ...more]);
+      setHasMore(more.length === PAGE_SIZE);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load more');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -153,7 +193,7 @@ export function GameList() {
                 </div>
                 <div style={{ color: '#888', fontSize: '13px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
                   <span>{game.format.toUpperCase()}</span>
-                  <span>Map: {game.map}</span>
+                  <span>Map: {friendlyMap(game.map)}</span>
                   <span>Duration: {formatDuration(game.game_time_seconds)}</span>
                   <span style={{ color: '#f5a623' }}>
                     {game.spectator_count} {game.spectator_count === 1 ? 'spectator' : 'spectators'}
@@ -199,66 +239,86 @@ export function GameList() {
           No matches yet
         </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid #333' }}>
-              <th style={{ textAlign: 'left', padding: '8px 12px', color: '#888', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase' }}>ID</th>
-              <th style={{ textAlign: 'left', padding: '8px 12px', color: '#888', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase' }}>Format</th>
-              <th style={{ textAlign: 'left', padding: '8px 12px', color: '#888', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase' }}>Map</th>
-              <th style={{ textAlign: 'left', padding: '8px 12px', color: '#888', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase' }}>Status</th>
-              <th style={{ textAlign: 'left', padding: '8px 12px', color: '#888', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase' }}>When</th>
-              <th style={{ padding: '8px 12px' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {recentMatches.map(m => (
-              <tr
-                key={m.id}
-                style={{
-                  borderBottom: '1px solid #1a1a2e',
-                  cursor: 'pointer',
-                }}
-                onClick={() => navigate(`/matches/${m.id}`)}
-                onMouseOver={e => (e.currentTarget.style.background = '#1a1a2e')}
-                onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <td style={{ padding: '10px 12px', color: '#aaa', fontSize: '14px' }}>#{m.id}</td>
-                <td style={{ padding: '10px 12px', color: '#e0e0e0', fontSize: '14px' }}>{m.format.toUpperCase()}</td>
-                <td style={{ padding: '10px 12px', color: '#aaa', fontSize: '14px' }}>{m.map}</td>
-                <td style={{ padding: '10px 12px', fontSize: '14px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {recentMatches.map(m => (
+            <div
+              key={m.id}
+              onClick={() => navigate(`/matches/${m.id}`)}
+              style={{
+                padding: '12px 16px',
+                background: '#16213e',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                transition: 'background 0.15s',
+              }}
+              onMouseOver={e => (e.currentTarget.style.background = '#1a1a3e')}
+              onMouseOut={e => (e.currentTarget.style.background = '#16213e')}
+            >
+              {/* Match ID */}
+              <span style={{ color: '#555', fontSize: '12px', fontFamily: 'monospace', width: '40px', flexShrink: 0 }}>
+                #{m.id}
+              </span>
+
+              {/* Player names - primary content */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {m.players && m.players.length > 0
+                    ? m.players.join(' vs ')
+                    : <span style={{ color: '#666', fontStyle: 'italic' }}>Unknown players</span>
+                  }
+                </div>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{
-                    color: m.status === 'finished' ? '#16c79a' : m.status === 'pending' ? '#f5a623' : '#e94560',
-                    fontWeight: 500,
+                    color: '#888',
+                    fontSize: '11px',
+                    background: '#0a0a1a',
+                    padding: '1px 6px',
+                    borderRadius: '3px',
                   }}>
-                    {m.status}
+                    {m.format.toUpperCase()}
                   </span>
-                </td>
-                <td style={{ padding: '10px 12px', color: '#888', fontSize: '13px' }}>
-                  {timeAgo(m.finished_at ?? m.created_at)}
-                </td>
-                <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                  <button
-                    onClick={e => {
-                      e.stopPropagation();
-                      navigate(`/matches/${m.id}`);
-                    }}
-                    style={{
-                      padding: '4px 12px',
-                      borderRadius: '4px',
-                      border: '1px solid #333',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      background: 'transparent',
-                      color: '#aaa',
-                    }}
-                  >
-                    Details
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <span style={{ color: '#666', fontSize: '12px' }}>
+                    {friendlyMap(m.map)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Status badge */}
+              <StatusBadge status={m.status} />
+
+              {/* Time */}
+              <span style={{ color: '#666', fontSize: '12px', flexShrink: 0, width: '55px', textAlign: 'right' }}>
+                {timeAgo(m.finished_at ?? m.created_at)}
+              </span>
+            </div>
+          ))}
+
+          {/* Load More */}
+          {hasMore && (
+            <div style={{ textAlign: 'center', padding: '12px' }}>
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                style={{
+                  padding: '8px 24px',
+                  background: 'transparent',
+                  color: '#f5a623',
+                  border: '1px solid #f5a623',
+                  borderRadius: '4px',
+                  cursor: loadingMore ? 'default' : 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  opacity: loadingMore ? 0.6 : 1,
+                }}
+              >
+                {loadingMore ? 'Loading...' : 'Load More'}
+              </button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

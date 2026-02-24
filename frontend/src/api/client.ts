@@ -435,12 +435,12 @@ export const api = {
   listMaps: (): Promise<MapInfo[]> =>
     fetch(`${BASE_URL}/api/maps`).then(r => handleResponse<MapInfo[]>(r)),
 
-  startGame: (players: { bot_version_id: number; name?: string }[], map?: string): Promise<{ status: string; message: string; match_id?: number }> =>
+  startGame: (players: { bot_version_id: number; name?: string }[], map?: string, headless?: boolean): Promise<{ status: string; message: string; match_id?: number }> =>
     fetch(`${BASE_URL}/api/game/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ players, map }),
-    }).then(r => handleResponse<{ status: string; message: string }>(r)),
+      body: JSON.stringify({ players, map, headless }),
+    }).then(r => handleResponse<{ status: string; message: string; match_id?: number }>(r)),
 
   stopGame: (): Promise<void> =>
     fetch(`${BASE_URL}/api/game/stop`, { method: 'POST', headers: authHeaders() }).then(r => {
@@ -468,8 +468,8 @@ export const api = {
     fetch(`${BASE_URL}/api/matches/${matchId}/replay`, { headers: authHeaders() }).then(r => handleResponse<ReplayData>(r)),
 
   // Match listing
-  listMatches: (limit = 20): Promise<MatchDetail['match'][]> =>
-    fetch(`${BASE_URL}/api/matches?limit=${limit}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),
+  listMatches: (limit = 20, offset = 0): Promise<(MatchDetail['match'] & { players?: string[] })[]> =>
+    fetch(`${BASE_URL}/api/matches?limit=${limit}&offset=${offset}`, { headers: authHeaders() }).then(r => handleResponse<(MatchDetail['match'] & { players?: string[] })[]>(r)),
 
   listMyMatches: (limit = 50, offset = 0): Promise<MatchDetail['match'][]> =>
     fetch(`${BASE_URL}/api/matches/mine?limit=${limit}&offset=${offset}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),

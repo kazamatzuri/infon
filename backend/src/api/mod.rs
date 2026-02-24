@@ -70,6 +70,7 @@ pub struct AddTournamentEntryRequest {
 pub struct StartGameRequest {
     pub players: Vec<StartGamePlayer>,
     pub map: Option<String>,
+    pub headless: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1140,7 +1141,8 @@ async fn start_game(
     _auth: AuthUser,
     Json(req): Json<StartGameRequest>,
 ) -> impl IntoResponse {
-    if state.game_server.is_running() {
+    let headless_early = req.headless.unwrap_or(false);
+    if !headless_early && state.game_server.is_running() {
         return json_error(StatusCode::CONFLICT, "A game is already running").into_response();
     }
 
@@ -1208,6 +1210,35 @@ async fn start_game(
         }
     }
 
+    let headless = req.headless.unwrap_or(false);
+
+    if headless {
+        // Queue headless game
+        state.game_queue.enqueue(crate::queue::QueueEntry {
+            match_id: m.id,
+            players: players
+                .iter()
+                .zip(bot_version_ids.iter())
+                .map(|(p, &bvid)| crate::queue::QueuePlayer {
+                    bot_version_id: bvid,
+                    name: p.name.clone(),
+                })
+                .collect(),
+            map: req.map.clone(),
+            headless: true,
+        });
+
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "status": "queued",
+                "match_id": m.id,
+                "message": "Headless game queued."
+            })),
+        )
+            .into_response();
+    }
+
     // Build completion callback for Elo, replay, and match finishing
     let on_complete = build_game_completion_callback(
         state.db.clone(),
@@ -1268,10 +1299,37 @@ async fn list_matches(
     Query(params): Query<PaginationParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(20).min(100);
-    match state.db.list_recent_matches(limit).await {
-        Ok(matches) => (StatusCode::OK, Json(json!(matches))).into_response(),
-        Err(e) => internal_error(e).into_response(),
+    let offset = params.offset.unwrap_or(0).max(0);
+    let matches = match state.db.list_recent_matches(limit, offset).await {
+        Ok(m) => m,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // Fetch player names for these matches
+    let match_ids: Vec<i64> = matches.iter().map(|m| m.id).collect();
+    let player_names = match state.db.get_match_player_names(&match_ids).await {
+        Ok(names) => names,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // Group player names by match_id
+    let mut players_map: std::collections::HashMap<i64, Vec<String>> =
+        std::collections::HashMap::new();
+    for (mid, name) in player_names {
+        players_map.entry(mid).or_default().push(name);
     }
+
+    // Build response with players field
+    let result: Vec<serde_json::Value> = matches
+        .iter()
+        .map(|m| {
+            let mut v = serde_json::to_value(m).unwrap();
+            v["players"] = json!(players_map.get(&m.id).unwrap_or(&vec![]));
+            v
+        })
+        .collect();
+
+    (StatusCode::OK, Json(json!(result))).into_response()
 }
 
 // ── My matches handler ───────────────────────────────────────────────

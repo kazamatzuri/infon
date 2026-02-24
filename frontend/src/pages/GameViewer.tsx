@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { GameCanvas } from '../components/GameCanvas';
 import { api } from '../api/client';
 import type { Bot, BotVersion, MapInfo } from '../api/client';
@@ -12,6 +13,7 @@ interface PlayerSlot {
 }
 
 export function GameViewer() {
+  const navigate = useNavigate();
   const [phase, setPhase] = useState<'loading' | 'setup' | 'running'>('loading');
   const [bots, setBots] = useState<Bot[]>([]);
   const [versions, setVersions] = useState<Record<number, BotVersion[]>>({});
@@ -25,6 +27,8 @@ export function GameViewer() {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [gameEnded, setGameEnded] = useState(false);
+  const [headless, setHeadless] = useState(false);
+  const [queuedMatchId, setQueuedMatchId] = useState<number | null>(null);
 
   // Check game status and load bots on mount
   useEffect(() => {
@@ -95,6 +99,7 @@ export function GameViewer() {
 
   const handleStart = async () => {
     setError('');
+    setQueuedMatchId(null);
     const players = slots
       .filter(s => s.versionId !== null)
       .map(s => ({ bot_version_id: s.versionId!, name: s.name || undefined }));
@@ -106,8 +111,12 @@ export function GameViewer() {
 
     setStarting(true);
     try {
-      await api.startGame(players, selectedMap);
-      setPhase('running');
+      const result = await api.startGame(players, selectedMap, headless || undefined);
+      if (result.status === 'queued' && result.match_id) {
+        setQueuedMatchId(result.match_id);
+      } else {
+        setPhase('running');
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to start game');
     } finally {
@@ -175,6 +184,18 @@ export function GameViewer() {
         </div>
       )}
 
+      {queuedMatchId && (
+        <div style={{ background: '#16c79a20', border: '1px solid #16c79a', borderRadius: '6px', padding: '12px 16px', marginBottom: '16px', color: '#16c79a', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Headless game queued (Match #{queuedMatchId}).</span>
+          <button
+            onClick={() => navigate(`/matches/${queuedMatchId}`)}
+            style={{ background: '#16c79a', color: '#fff', border: 'none', padding: '4px 14px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '12px' }}
+          >
+            View Match
+          </button>
+        </div>
+      )}
+
       {bots.length === 0 ? (
         <div style={{ background: '#16213e', borderRadius: '8px', padding: '32px', textAlign: 'center' }}>
           <p style={{ color: '#888', marginBottom: '8px' }}>No bots in your library yet.</p>
@@ -182,21 +203,32 @@ export function GameViewer() {
         </div>
       ) : (
         <>
-          <div style={{ marginBottom: '1rem' }}>
-            <label htmlFor="map-select" style={{ fontWeight: 'bold', marginRight: '0.5rem' }}>Map:</label>
-            <select
-              id="map-select"
-              value={selectedMap}
-              onChange={(e) => setSelectedMap(e.target.value)}
-              style={inputStyle}
-            >
-              <option value="random">Random</option>
-              {maps.filter(m => m.name !== 'random').map(m => (
-                <option key={m.name} value={m.name}>
-                  {m.name} ({m.width}x{m.height})
-                </option>
-              ))}
-            </select>
+          <div style={{ marginBottom: '1rem', display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <label htmlFor="map-select" style={{ fontWeight: 'bold', marginRight: '0.5rem' }}>Map:</label>
+              <select
+                id="map-select"
+                value={selectedMap}
+                onChange={(e) => setSelectedMap(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="random">Random</option>
+                {maps.filter(m => m.name !== 'random').map(m => (
+                  <option key={m.name} value={m.name}>
+                    {m.name} ({m.width}x{m.height})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#ccc' }}>
+              <input
+                type="checkbox"
+                checked={headless}
+                onChange={e => { setHeadless(e.target.checked); setQueuedMatchId(null); }}
+                style={{ accentColor: '#f5a623' }}
+              />
+              Headless (faster, no live view)
+            </label>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>

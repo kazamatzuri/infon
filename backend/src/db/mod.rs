@@ -1173,13 +1173,51 @@ impl Database {
         Ok(row)
     }
 
-    pub async fn list_recent_matches(&self, limit: i64) -> Result<Vec<Match>, sqlx::Error> {
+    pub async fn list_recent_matches(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Match>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Match>(
-            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches ORDER BY id DESC LIMIT $1",
+            "SELECT id, format, map, status, winner_bot_version_id, created_at, finished_at FROM matches ORDER BY id DESC LIMIT $1 OFFSET $2",
         )
         .bind(limit)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await?;
+        Ok(rows)
+    }
+
+    /// Fetch player names (bot names) for a set of match IDs.
+    /// Returns a Vec of (match_id, bot_name) pairs.
+    pub async fn get_match_player_names(
+        &self,
+        match_ids: &[i64],
+    ) -> Result<Vec<(i64, String)>, sqlx::Error> {
+        if match_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        // Build placeholder list for ANY-style query
+        // sqlx doesn't support binding slices for all backends, so we build the IN list manually
+        let placeholders: Vec<String> = match_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+        let sql = format!(
+            "SELECT mp.match_id, b.name \
+             FROM match_participants mp \
+             JOIN bot_versions bv ON bv.id = mp.bot_version_id \
+             JOIN bots b ON b.id = bv.bot_id \
+             WHERE mp.match_id IN ({}) \
+             ORDER BY mp.match_id, mp.player_slot",
+            placeholders.join(", ")
+        );
+        let mut query = sqlx::query_as::<_, (i64, String)>(&sql);
+        for id in match_ids {
+            query = query.bind(*id);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
         Ok(rows)
     }
 
@@ -2413,7 +2451,7 @@ mod tests {
         let m3 = db.create_match("1v1", "forest").await.unwrap();
 
         // List all
-        let matches = db.list_recent_matches(10).await.unwrap();
+        let matches = db.list_recent_matches(10, 0).await.unwrap();
         assert_eq!(matches.len(), 3);
         // Should be ordered by created_at DESC (most recent first)
         // Since they are created in quick succession, IDs should be descending
@@ -2422,14 +2460,20 @@ mod tests {
         assert_eq!(matches[2].id, m1.id);
 
         // List with limit
-        let limited = db.list_recent_matches(2).await.unwrap();
+        let limited = db.list_recent_matches(2, 0).await.unwrap();
         assert_eq!(limited.len(), 2);
         assert_eq!(limited[0].id, m3.id);
         assert_eq!(limited[1].id, m2.id);
 
+        // List with offset
+        let offset = db.list_recent_matches(10, 1).await.unwrap();
+        assert_eq!(offset.len(), 2);
+        assert_eq!(offset[0].id, m2.id);
+        assert_eq!(offset[1].id, m1.id);
+
         // Empty result
         let empty_db = test_db().await;
-        let empty = empty_db.list_recent_matches(10).await.unwrap();
+        let empty = empty_db.list_recent_matches(10, 0).await.unwrap();
         assert!(empty.is_empty());
     }
 
