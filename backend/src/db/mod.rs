@@ -254,7 +254,8 @@ pub struct Notification {
     pub title: String,
     pub message: String,
     pub data: Option<String>,
-    pub read: bool,
+    #[serde(serialize_with = "serialize_int_as_bool")]
+    pub read: i32,
     pub created_at: String,
 }
 

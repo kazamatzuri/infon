@@ -131,7 +131,9 @@ pub struct Game {
     pub next_creature_id: u32,
     pub next_player_id: u32,
     pub king_player_id: Option<u32>,
+    pub king_time: i32,
     pub tick_delta: i32,
+    pub score_limit: Option<i32>,
     pub player_scores: Rc<RefCell<HashMap<u32, i32>>>,
     pub player_names: Rc<RefCell<HashMap<u32, String>>>,
     /// Pending events per player (player_id -> events)
@@ -155,7 +157,9 @@ impl Game {
             next_creature_id: 1,
             next_player_id: 1,
             king_player_id: None,
+            king_time: 0,
             tick_delta: 100,
+            score_limit: Some(500),
             player_scores: Rc::new(RefCell::new(HashMap::new())),
             player_names: Rc::new(RefCell::new(HashMap::new())),
             pending_events: HashMap::new(),
@@ -326,6 +330,9 @@ impl Game {
             .or_default()
             .creatures_spawned += 1;
 
+        // Score bonus for spawning
+        self.change_player_score(player_id, 10);
+
         // Metrics
         crate::metrics::CREATURES_SPAWNED_TOTAL
             .with_label_values(&[creature_type_label(creature_type)])
@@ -340,6 +347,18 @@ impl Game {
             });
 
         Some(id)
+    }
+
+    /// Change a player's score by delta points.
+    fn change_player_score(&mut self, player_id: u32, delta: i32) {
+        self.player_scores
+            .borrow_mut()
+            .entry(player_id)
+            .and_modify(|s| *s += delta)
+            .or_insert(delta);
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.score += delta;
+        }
     }
 
     /// Kill a creature. Queues kill event.
@@ -370,6 +389,41 @@ impl Game {
                 }
             }
 
+            // Score changes based on kill type
+            if let Some(kid) = killer_id {
+                if kid == creature_id {
+                    // Suicide
+                    self.change_player_score(player_id, -40);
+                } else {
+                    let killer_info = self
+                        .creatures
+                        .borrow()
+                        .get(&kid)
+                        .map(|c| (c.player_id, c.creature_type));
+                    if let Some((killer_player_id, killer_type)) = killer_info {
+                        match (ctype, killer_type) {
+                            (CREATURE_SMALL, CREATURE_BIG) => {
+                                self.change_player_score(player_id, -3);
+                                self.change_player_score(killer_player_id, 10);
+                            }
+                            (CREATURE_BIG, CREATURE_BIG) => {
+                                self.change_player_score(player_id, -8);
+                                self.change_player_score(killer_player_id, 15);
+                            }
+                            (CREATURE_FLYER, CREATURE_SMALL)
+                            | (CREATURE_FLYER, CREATURE_BIG) => {
+                                self.change_player_score(player_id, -4);
+                                self.change_player_score(killer_player_id, 12);
+                            }
+                            _ => {} // Should not happen based on combat rules
+                        }
+                    }
+                }
+            } else {
+                // Starvation death
+                self.change_player_score(player_id, -3);
+            }
+
             self.pending_events
                 .entry(player_id)
                 .or_default()
@@ -383,7 +437,11 @@ impl Game {
             if let Some(c) = creatures.get(&creature_id) {
                 let tx = c.tile_x();
                 let ty = c.tile_y();
-                let food = c.food;
+                let mut food = c.food;
+                // Suicide drops only 1/3 of food
+                if killer_id == Some(creature_id) {
+                    food /= 3;
+                }
                 drop(creatures);
                 if food > 0 {
                     self.world.borrow_mut().add_food(tx, ty, food);
@@ -888,7 +946,8 @@ impl Game {
         }
     }
 
-    /// King of the Hill scoring: player with creature idle on koth tile gets points.
+    /// King of the Hill scoring: player holding the KOTH tile exclusively
+    /// earns +30 points for every 10,000ms of continuous holding.
     fn process_koth(&mut self) {
         let world = self.world.borrow();
         let koth_x = world.koth_x;
@@ -911,19 +970,28 @@ impl Game {
                 }
             }
         }
+        drop(creatures);
 
         if multiple_players {
+            // Contested: reset king
             self.king_player_id = None;
+            self.king_time = 0;
         } else if let Some(pid) = koth_player {
-            self.king_player_id = Some(pid);
-            self.player_scores
-                .borrow_mut()
-                .entry(pid)
-                .and_modify(|s| *s += 1)
-                .or_insert(1);
-            if let Some(player) = self.players.get_mut(&pid) {
-                player.score += 1;
+            // Single player on KOTH
+            if self.king_player_id != Some(pid) {
+                // New king
+                self.king_player_id = Some(pid);
+                self.king_time = 0;
             }
+            self.king_time += self.tick_delta;
+            while self.king_time >= 10000 {
+                self.change_player_score(pid, 30);
+                self.king_time -= 10000;
+            }
+        } else {
+            // No one on KOTH
+            self.king_player_id = None;
+            self.king_time = 0;
         }
     }
 
@@ -946,6 +1014,18 @@ impl Game {
         } else {
             None
         }
+    }
+
+    /// Check if any player has reached the score limit.
+    pub fn check_score_limit_winner(&self) -> Option<u32> {
+        let limit = self.score_limit?;
+        let scores = self.player_scores.borrow();
+        for (&pid, &score) in scores.iter() {
+            if score >= limit {
+                return Some(pid);
+            }
+        }
+        None
     }
 
     /// Create a snapshot of the game state for rendering.
@@ -1252,6 +1332,7 @@ mod tests {
     fn test_koth() {
         let world = make_test_world();
         let mut game = Game::new(world);
+        game.score_limit = None; // disable score limit for this test
         let pid = game.add_player("KothBot", "").unwrap();
 
         // Spawn creature on the koth tile
@@ -1259,15 +1340,23 @@ mod tests {
         let koth_y = World::tile_center(game.world.borrow().koth_y);
         game.spawn_creature(pid, koth_x, koth_y, CREATURE_SMALL);
 
-        // Run a tick
+        // Run a single tick -- king is set but no score yet (need 10,000ms)
         game.tick();
+        assert_eq!(game.king_player_id, Some(pid));
+        let score_after_1 = *game.player_scores.borrow().get(&pid).unwrap_or(&0);
+        assert_eq!(score_after_1, 0, "No KOTH score after 1 tick (100ms)");
+        assert_eq!(game.king_time, 100);
 
-        // Player should have scored
-        let score = *game.player_scores.borrow().get(&pid).unwrap_or(&0);
-        assert!(
-            score > 0,
-            "Player should have scored from koth, got {score}"
+        // Run 99 more ticks (total 10,000ms) -- should award +30
+        for _ in 0..99 {
+            game.tick();
+        }
+        let score_after_100 = *game.player_scores.borrow().get(&pid).unwrap_or(&0);
+        assert_eq!(
+            score_after_100, 30,
+            "Should have +30 after 10,000ms on KOTH"
         );
+        assert_eq!(game.king_time, 0);
         assert_eq!(game.king_player_id, Some(pid));
     }
 

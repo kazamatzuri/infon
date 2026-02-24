@@ -95,10 +95,32 @@ Damage depends on attacker and defender types:
 
 ## Scoring
 
-- Players earn points by holding King of the Hill.
-- Rule handlers award/deduct points for kills and other events.
-- `suicide()` costs 40 points.
-- Players may be kicked if their score drops too low.
+Points are earned and lost through several mechanisms:
+
+### King of the Hill
+- A creature in `CREATURE_IDLE` state on the King of the Hill tile scores for its player.
+- +30 points awarded for every 10 seconds of continuous holding.
+- If the king player changes, the timer resets.
+- If multiple players have creatures on the tile simultaneously, no one scores and the timer resets.
+- `king_player()` returns the current king's player ID.
+
+### Kill & Death Points
+| Event | Points |
+|-------|--------|
+| Spawning a creature | +10 to parent's player |
+| Killing a Small (Type 0) | +10 to killer, -3 to victim |
+| Killing a Big (Type 1) | +15 to killer, -8 to victim |
+| Killing a Flyer (Type 2) | +12 to killer, -4 to victim |
+| Creature starvation | -3 to owner |
+| Creature suicide | -40 to owner |
+
+## Win Conditions
+
+A match can end in three ways (checked in priority order):
+
+1. **Score Limit** (default: 500 points) — The first player to reach the score limit wins immediately.
+2. **Last Player Standing** — If all of one player's creatures are eliminated, the surviving player wins.
+3. **Time Limit** (default: 10 minutes / 6,000 ticks) — When time expires, the player with the highest score wins. If the top players are tied, the match is a draw.
 
 ## Creature Lifecycle
 

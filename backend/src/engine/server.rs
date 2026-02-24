@@ -426,7 +426,12 @@ impl GameServer {
 
                     prev_snapshot = Some(snapshot);
 
-                    // Check win condition: only one player has creatures left
+                    // Check win conditions
+                    if let Some(w) = game.check_score_limit_winner() {
+                        tracing::info!(player_id = w, "Player won — reached score limit");
+                        winner = Some(w);
+                        break;
+                    }
                     if let Some(w) = game.check_winner() {
                         tracing::info!(player_id = w, "Player won — last one standing");
                         winner = Some(w);
@@ -440,12 +445,20 @@ impl GameServer {
 
                 // Game ended -- send final scores
                 let final_snap = game.snapshot();
+                // Time-limit tiebreak: highest score wins, ties are draws
                 let winner = winner.or_else(|| {
-                    final_snap
+                    let max_score = final_snap.players.iter().map(|p| p.score).max()?;
+                    let top: Vec<_> = final_snap
                         .players
                         .iter()
-                        .max_by_key(|p| p.score)
-                        .map(|p| p.id)
+                        .filter(|p| p.score == max_score)
+                        .collect();
+                    if top.len() == 1 {
+                        Some(top[0].id)
+                    } else {
+                        tracing::info!("Time limit reached — draw ({} players tied at {max_score})", top.len());
+                        None
+                    }
                 });
 
                 let end_player_stats: Vec<PlayerEndStats> = player_ids
