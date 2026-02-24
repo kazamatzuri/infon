@@ -1,9 +1,16 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { ActiveGameInfo, MatchDetail } from '../api/client';
+import type { ActiveGameInfo, Bot, MatchDetail } from '../api/client';
 
 type MatchWithPlayers = MatchDetail['match'] & { players?: string[] };
+
+interface MatchFilters {
+  bot_id?: number;
+  username?: string;
+  status?: string;
+  sort: 'newest' | 'oldest';
+}
 
 const PAGE_SIZE = 20;
 
@@ -63,13 +70,36 @@ export function GameList() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [allBots, setAllBots] = useState<Bot[]>([]);
+  const [filters, setFilters] = useState<MatchFilters>({ sort: 'newest' });
+  const [usernameInput, setUsernameInput] = useState('');
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  useEffect(() => {
+    // Fetch all bots for the filter dropdown (with ?all=true)
+    fetch('/api/bots?all=true', { headers: { Authorization: `Bearer ${localStorage.getItem('infon_token') || ''}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setAllBots)
+      .catch(() => {});
+  }, []);
+
+  const buildOpts = useCallback((f: MatchFilters, offset: number) => {
+    const opts: Parameters<typeof api.listMatches>[0] = { limit: PAGE_SIZE, offset };
+    if (f.bot_id) opts.bot_id = f.bot_id;
+    if (f.username) opts.username = f.username;
+    if (f.status) opts.status = f.status;
+    opts.sort = f.sort;
+    return opts;
+  }, []);
 
   const loadData = useCallback(async () => {
     try {
       setError(null);
+      const f = filtersRef.current;
       const [active, recent] = await Promise.all([
         api.listActiveGames(),
-        api.listMatches(PAGE_SIZE, 0),
+        api.listMatches(buildOpts(f, 0)),
       ]);
       setActiveGames(active);
       setRecentMatches(recent);
@@ -79,12 +109,12 @@ export function GameList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [buildOpts]);
 
   const loadMore = async () => {
     setLoadingMore(true);
     try {
-      const more = await api.listMatches(PAGE_SIZE, recentMatches.length);
+      const more = await api.listMatches(buildOpts(filters, recentMatches.length));
       setRecentMatches(prev => [...prev, ...more]);
       setHasMore(more.length === PAGE_SIZE);
     } catch (err) {
@@ -94,11 +124,27 @@ export function GameList() {
     }
   };
 
+  // Re-fetch when filters change
   useEffect(() => {
+    setLoading(true);
+    setRecentMatches([]);
     loadData();
+  }, [filters, loadData]);
+
+  // Poll for active games
+  useEffect(() => {
     const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
   }, [loadData]);
+
+  const updateFilter = (patch: Partial<MatchFilters>) => {
+    setFilters(prev => ({ ...prev, ...patch }));
+  };
+
+  const applyUsername = () => {
+    const trimmed = usernameInput.trim();
+    updateFilter({ username: trimmed || undefined });
+  };
 
   return (
     <div style={{ padding: '24px', maxWidth: '960px', margin: '0 auto' }}>
@@ -225,6 +271,89 @@ export function GameList() {
 
       {/* Recent Matches */}
       <h3 style={{ color: '#e0e0e0', marginBottom: '12px', fontSize: '16px' }}>Recent Matches</h3>
+
+      {/* Filter bar */}
+      <div style={{
+        display: 'flex',
+        gap: '12px',
+        marginBottom: '16px',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+      }}>
+        {/* Bot filter */}
+        <select
+          value={filters.bot_id ?? ''}
+          onChange={e => updateFilter({ bot_id: e.target.value ? Number(e.target.value) : undefined })}
+          style={{
+            padding: '6px 10px',
+            background: '#16213e',
+            color: '#e0e0e0',
+            border: '1px solid #333',
+            borderRadius: '4px',
+            fontSize: '13px',
+          }}
+        >
+          <option value="">All Bots</option>
+          {allBots.map(b => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </select>
+
+        {/* Username filter */}
+        <input
+          type="text"
+          placeholder="Username"
+          value={usernameInput}
+          onChange={e => setUsernameInput(e.target.value)}
+          onBlur={applyUsername}
+          onKeyDown={e => { if (e.key === 'Enter') applyUsername(); }}
+          style={{
+            padding: '6px 10px',
+            background: '#16213e',
+            color: '#e0e0e0',
+            border: '1px solid #333',
+            borderRadius: '4px',
+            fontSize: '13px',
+            width: '130px',
+          }}
+        />
+
+        {/* Status filter */}
+        <select
+          value={filters.status ?? ''}
+          onChange={e => updateFilter({ status: e.target.value || undefined })}
+          style={{
+            padding: '6px 10px',
+            background: '#16213e',
+            color: '#e0e0e0',
+            border: '1px solid #333',
+            borderRadius: '4px',
+            fontSize: '13px',
+          }}
+        >
+          <option value="">All Status</option>
+          <option value="finished">Finished</option>
+          <option value="running">Running</option>
+          <option value="pending">Pending</option>
+          <option value="abandoned">Abandoned</option>
+        </select>
+
+        {/* Sort toggle */}
+        <button
+          onClick={() => updateFilter({ sort: filters.sort === 'newest' ? 'oldest' : 'newest' })}
+          style={{
+            padding: '6px 14px',
+            background: 'transparent',
+            color: '#888',
+            border: '1px solid #333',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '13px',
+          }}
+        >
+          {filters.sort === 'newest' ? 'Newest first' : 'Oldest first'}
+        </button>
+      </div>
 
       {loading && recentMatches.length === 0 ? (
         <div style={{ color: '#888', padding: '16px' }}>Loading...</div>

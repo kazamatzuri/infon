@@ -468,8 +468,18 @@ export const api = {
     fetch(`${BASE_URL}/api/matches/${matchId}/replay`, { headers: authHeaders() }).then(r => handleResponse<ReplayData>(r)),
 
   // Match listing
-  listMatches: (limit = 20, offset = 0): Promise<(MatchDetail['match'] & { players?: string[] })[]> =>
-    fetch(`${BASE_URL}/api/matches?limit=${limit}&offset=${offset}`, { headers: authHeaders() }).then(r => handleResponse<(MatchDetail['match'] & { players?: string[] })[]>(r)),
+  listMatches: (opts?: { limit?: number; offset?: number; bot_id?: number; user_id?: number; username?: string; sort?: 'newest' | 'oldest'; status?: string }): Promise<(MatchDetail['match'] & { players?: string[] })[]> => {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.offset != null) params.set('offset', String(opts.offset));
+    if (opts?.bot_id != null) params.set('bot_id', String(opts.bot_id));
+    if (opts?.user_id != null) params.set('user_id', String(opts.user_id));
+    if (opts?.username) params.set('username', opts.username);
+    if (opts?.sort) params.set('sort', opts.sort);
+    if (opts?.status) params.set('status', opts.status);
+    const qs = params.toString();
+    return fetch(`${BASE_URL}/api/matches${qs ? '?' + qs : ''}`, { headers: authHeaders() }).then(r => handleResponse<(MatchDetail['match'] & { players?: string[] })[]>(r));
+  },
 
   listMyMatches: (limit = 50, offset = 0): Promise<MatchDetail['match'][]> =>
     fetch(`${BASE_URL}/api/matches/mine?limit=${limit}&offset=${offset}`, { headers: authHeaders() }).then(r => handleResponse<MatchDetail['match'][]>(r)),

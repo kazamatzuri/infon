@@ -105,6 +105,17 @@ pub struct PaginationParams {
 }
 
 #[derive(Deserialize)]
+pub struct MatchListParams {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub bot_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub username: Option<String>,
+    pub sort: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct CreateTeamRequest {
     pub name: String,
 }
@@ -1296,11 +1307,24 @@ async fn stop_game(State(state): State<AppState>, _auth: AuthUser) -> impl IntoR
 
 async fn list_matches(
     State(state): State<AppState>,
-    Query(params): Query<PaginationParams>,
+    Query(params): Query<MatchListParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(20).min(100);
     let offset = params.offset.unwrap_or(0).max(0);
-    let matches = match state.db.list_recent_matches(limit, offset).await {
+    let sort = params.sort.as_deref().unwrap_or("newest");
+    let matches = match state
+        .db
+        .list_matches_filtered(
+            limit,
+            offset,
+            params.bot_id,
+            params.user_id,
+            params.username.as_deref(),
+            params.status.as_deref(),
+            sort,
+        )
+        .await
+    {
         Ok(m) => m,
         Err(e) => return internal_error(e).into_response(),
     };

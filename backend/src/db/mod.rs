@@ -1188,6 +1188,88 @@ impl Database {
         Ok(rows)
     }
 
+    pub async fn list_matches_filtered(
+        &self,
+        limit: i64,
+        offset: i64,
+        bot_id: Option<i64>,
+        user_id: Option<i64>,
+        username: Option<&str>,
+        status: Option<&str>,
+        sort: &str,
+    ) -> Result<Vec<Match>, sqlx::Error> {
+        let needs_join = bot_id.is_some() || user_id.is_some() || username.is_some();
+
+        let mut sql = String::from(
+            "SELECT DISTINCT m.id, m.format, m.map, m.status, m.winner_bot_version_id, m.created_at, m.finished_at FROM matches m",
+        );
+
+        if needs_join {
+            sql.push_str(
+                " JOIN match_participants mp ON mp.match_id = m.id \
+                 JOIN bot_versions bv ON bv.id = mp.bot_version_id \
+                 JOIN bots b ON b.id = bv.bot_id",
+            );
+            if username.is_some() {
+                sql.push_str(" JOIN users u ON u.id = b.owner_id");
+            }
+        }
+
+        let mut conditions: Vec<String> = Vec::new();
+        let mut param_index: usize = 0;
+
+        if bot_id.is_some() {
+            param_index += 1;
+            conditions.push(format!("b.id = ${param_index}"));
+        }
+        if user_id.is_some() {
+            param_index += 1;
+            conditions.push(format!("b.owner_id = ${param_index}"));
+        }
+        if username.is_some() {
+            param_index += 1;
+            conditions.push(format!("u.username = ${param_index}"));
+        }
+        if status.is_some() {
+            param_index += 1;
+            conditions.push(format!("m.status = ${param_index}"));
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        let order = if sort == "oldest" { "ASC" } else { "DESC" };
+        param_index += 1;
+        let limit_idx = param_index;
+        param_index += 1;
+        let offset_idx = param_index;
+        sql.push_str(&format!(
+            " ORDER BY m.id {order} LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        ));
+
+        let mut query = sqlx::query_as::<_, Match>(&sql);
+
+        if let Some(bid) = bot_id {
+            query = query.bind(bid);
+        }
+        if let Some(uid) = user_id {
+            query = query.bind(uid);
+        }
+        if let Some(uname) = username {
+            query = query.bind(uname.to_string());
+        }
+        if let Some(st) = status {
+            query = query.bind(st.to_string());
+        }
+        query = query.bind(limit);
+        query = query.bind(offset);
+
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows)
+    }
+
     /// Fetch player names (bot names) for a set of match IDs.
     /// Returns a Vec of (match_id, bot_name) pairs.
     pub async fn get_match_player_names(
