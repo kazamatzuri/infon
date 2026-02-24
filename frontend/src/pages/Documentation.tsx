@@ -495,50 +495,38 @@ function RestApiDocs() {
     <>
       <SectionTitle>REST API & Authentication</SectionTitle>
 
-      <Card title="Authentication Methods">
+      <Card title="Authentication with API Keys">
         <p style={textStyle}>
-          The Infon API supports two authentication methods. Both use the same{' '}
-          <code style={{ color: '#16c79a' }}>Authorization</code> header format:
+          To use the Infon API programmatically, you need an API key. API keys are long-lived tokens
+          that don't expire (but can be revoked at any time).
         </p>
-        <CodeBlock>{'Authorization: Bearer <token>'}</CodeBlock>
 
-        <h4 style={{ color: '#f5a623', marginTop: 20, marginBottom: 8, fontSize: 14 }}>
-          1. JWT Token (Session-Based)
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Creating an API Key
         </h4>
         <p style={textStyle}>
-          Obtained by logging in. Used automatically by the web UI. Tokens expire after a period of inactivity.
+          Go to the <strong style={{ color: '#e0e0e0' }}>API Keys</strong> page in the web UI (nav bar, top right).
+          Give your key a name and select the scopes you need. The key token (prefixed with{' '}
+          <code style={{ color: '#16c79a' }}>infon_</code>) is shown only once -- copy and store it securely.
         </p>
-        <CodeBlock>{`# Login to get a JWT token
-curl -X POST /api/auth/login \\
-  -H "Content-Type: application/json" \\
-  -d '{"username": "your_user", "password": "your_pass"}'
 
-# Response: {"token": "eyJ...", "user": {...}}
-
-# Use the token in subsequent requests
-curl /api/bots \\
-  -H "Authorization: Bearer eyJ..."`}</CodeBlock>
-
-        <h4 style={{ color: '#f5a623', marginTop: 20, marginBottom: 8, fontSize: 14 }}>
-          2. API Keys (Programmatic Access)
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Using Your API Key
         </h4>
         <p style={textStyle}>
-          API keys are long-lived tokens for scripts, CI pipelines, or external tools.
-          Create them from the <strong style={{ color: '#e0e0e0' }}>API Keys</strong> page in the web UI,
-          or via the API. Unlike JWT tokens, API keys do not expire (but can be revoked).
+          Include your API key in the <code style={{ color: '#16c79a' }}>Authorization</code> header of every request:
         </p>
-        <CodeBlock>{`# Create an API key (requires JWT auth)
-curl -X POST /api/api-keys \\
-  -H "Authorization: Bearer <jwt-token>" \\
+        <CodeBlock>{`Authorization: Bearer infon_<your_key>`}</CodeBlock>
+        <p style={textStyle}>Example:</p>
+        <CodeBlock>{`# List your bots
+curl http://localhost:3000/api/bots \\
+  -H "Authorization: Bearer infon_a1b2c3..."
+
+# Create a headless challenge match
+curl -X POST http://localhost:3000/api/matches/challenge \\
+  -H "Authorization: Bearer infon_a1b2c3..." \\
   -H "Content-Type: application/json" \\
-  -d '{"name": "My Script", "scopes": "bots:read,bots:write,matches:read,matches:write"}'
-
-# Response includes the key (shown only once!):
-# {"id": 1, "name": "My Script", "token": "infon_a1b2c3...", ...}
-
-# Use the API key exactly like a JWT token:
-curl /api/bots \\
-  -H "Authorization: Bearer infon_a1b2c3..."`}</CodeBlock>
+  -d '{"bot_version_id": 1, "opponent_bot_version_id": 2, "format": "1v1", "headless": true}'`}</CodeBlock>
       </Card>
 
       <Card title="API Key Scopes">
@@ -579,13 +567,6 @@ curl /api/bots \\
 
       <Card title="Key Endpoints">
         <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 8, fontSize: 14 }}>
-          Authentication
-        </h4>
-        <CodeBlock>{`POST /api/auth/register  - Create account
-POST /api/auth/login     - Get JWT token
-GET  /api/auth/me        - Current user info`}</CodeBlock>
-
-        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
           Bots & Versions
         </h4>
         <CodeBlock>{`GET/POST /api/bots                    - List/create bots
@@ -633,21 +614,17 @@ WS       /ws/game               - Live game WebSocket`}</CodeBlock>
 
       <Card title="Example: Automated Challenge via API Key">
         <p style={textStyle}>
-          Here is a complete example using curl to create an API key and run a headless challenge:
+          Create an API key from the web UI with <code style={{ color: '#16c79a' }}>bots:read,matches:read,matches:write</code> scopes,
+          then use it to automate matches:
         </p>
-        <CodeBlock>{`# Step 1: Login to get a JWT
-TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \\
-  -H "Content-Type: application/json" \\
-  -d '{"username": "player1", "password": "secret"}' | jq -r '.token')
+        <CodeBlock>{`# Set your API key (created from the API Keys page in the web UI)
+API_KEY="infon_your_key_here"
 
-# Step 2: Create an API key with match permissions
-API_KEY=$(curl -s -X POST http://localhost:3000/api/api-keys \\
-  -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"name": "challenge-bot", "scopes": "matches:write,matches:read,bots:read"}' \\
-  | jq -r '.token')
+# List your bots to find version IDs
+curl http://localhost:3000/api/bots \\
+  -H "Authorization: Bearer $API_KEY"
 
-# Step 3: Use the API key to create a headless challenge
+# Create a headless 1v1 challenge
 curl -X POST http://localhost:3000/api/matches/challenge \\
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
@@ -658,8 +635,12 @@ curl -X POST http://localhost:3000/api/matches/challenge \\
     "headless": true
   }'
 
-# Step 4: Check your match history
+# Check your match history
 curl http://localhost:3000/api/matches/mine \\
+  -H "Authorization: Bearer $API_KEY"
+
+# View match replay
+curl http://localhost:3000/api/matches/1/replay \\
   -H "Authorization: Bearer $API_KEY"`}</CodeBlock>
       </Card>
     </>
