@@ -657,7 +657,7 @@ async fn create_tournament(
     if req.name.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "name is required").into_response();
     }
-    let map = req.map.unwrap_or_else(|| "default".to_string());
+    let map = req.map.unwrap_or_else(|| "random".to_string());
     match state.db.create_tournament(&req.name, &map).await {
         Ok(tournament) => (StatusCode::CREATED, Json(json!(tournament))).into_response(),
         Err(e) => internal_error(e).into_response(),
@@ -988,7 +988,7 @@ async fn list_maps(State(state): State<AppState>) -> impl IntoResponse {
 pub fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World, String> {
     use crate::engine::world::RandomMapParams;
     match map.as_deref() {
-        None | Some("random") => Ok(World::generate_random(RandomMapParams::default())),
+        None | Some("random") | Some("default") => Ok(World::generate_random(RandomMapParams::default())),
         Some(name) => server::load_map(maps_dir, name),
     }
 }
