@@ -146,7 +146,7 @@ export function TournamentDetail() {
     try {
       setError(null);
       await api.runTournament(tournamentId);
-      navigate('/game');
+      await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start match');
     }
