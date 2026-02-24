@@ -425,12 +425,12 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
           const secs = totalSec % 60;
           const durationStr = `${mins}:${secs.toString().padStart(2, '0')}`;
 
-          // Build elo lookup from match detail participants
-          const eloMap = new Map<number, { before: number; after: number }>();
+          // Build elo lookup from match detail participants, keyed by bot name
+          const eloMap = new Map<string, { before: number; after: number }>();
           if (matchDetail?.match.status === 'finished') {
             for (const mp of matchDetail.participants) {
-              if (mp.elo_before != null && mp.elo_after != null) {
-                eloMap.set(mp.player_slot, { before: mp.elo_before, after: mp.elo_after });
+              if (mp.elo_before != null && mp.elo_after != null && mp.bot_name) {
+                eloMap.set(mp.bot_name, { before: mp.elo_before, after: mp.elo_after });
               }
             }
           }
@@ -456,7 +456,7 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
 
               {sorted.map((p, i) => {
                 const stats = gameEnd.player_stats?.find(s => s.player_id === p.id);
-                const elo = eloMap.get(p.id);
+                const elo = eloMap.get(p.name);
                 const isWinner = gameEnd.winner != null && p.id === gameEnd.winner;
                 return (
                   <div key={p.id} style={{

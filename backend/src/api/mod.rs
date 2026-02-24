@@ -1832,9 +1832,9 @@ pub fn build_game_completion_callback(
                 }
             };
 
-            // Update per-participant stats
-            for (i, p) in participants.iter().enumerate() {
-                let ps = result.player_scores.get(i);
+            // Update per-participant stats (match by bot_version_id, not index)
+            for p in participants.iter() {
+                let ps = result.player_scores.iter().find(|s| s.bot_version_id == p.bot_version_id);
                 let score = ps.map(|s| s.score).unwrap_or(0);
                 let spawned = ps.map(|s| s.creatures_spawned).unwrap_or(0);
                 let killed = ps.map(|s| s.creatures_killed).unwrap_or(0);
@@ -1842,12 +1842,13 @@ pub fn build_game_completion_callback(
                 let won = winner_version_id == Some(p.bot_version_id);
                 let lost = winner_version_id.is_some() && !won;
                 let draw = winner_version_id.is_none();
+                let placement = if won { 1 } else if lost { 2 } else { 0 };
 
                 let _ = db
                     .update_match_participant(
                         p.id,
                         score,
-                        Some((i + 1) as i32),
+                        Some(placement),
                         Some(0),
                         Some(0),
                         spawned,
@@ -1899,16 +1900,14 @@ pub fn build_game_completion_callback(
                     v1.games_played,
                 );
 
-                // Update elo_before/elo_after on participants
-                let ps0 = result.player_scores.get(0);
-                let ps1 = result.player_scores.get(1);
-                let score_0 = ps0.map(|s| s.score).unwrap_or(0);
-                let score_1 = ps1.map(|s| s.score).unwrap_or(0);
+                // Update elo_before/elo_after on participants (match by bot_version_id)
+                let ps0 = result.player_scores.iter().find(|s| s.bot_version_id == p0.bot_version_id);
+                let ps1 = result.player_scores.iter().find(|s| s.bot_version_id == p1.bot_version_id);
 
                 let _ = db
                     .update_match_participant(
                         p0.id,
-                        score_0,
+                        ps0.map(|s| s.score).unwrap_or(0),
                         Some(if outcome_0 == crate::elo::Outcome::Win {
                             1
                         } else {
@@ -1924,7 +1923,7 @@ pub fn build_game_completion_callback(
                 let _ = db
                     .update_match_participant(
                         p1.id,
-                        score_1,
+                        ps1.map(|s| s.score).unwrap_or(0),
                         Some(if outcome_1 == crate::elo::Outcome::Win {
                             1
                         } else {
@@ -1945,16 +1944,20 @@ pub fn build_game_completion_callback(
             // FFA placement scoring
             if format == "ffa" && participants.len() > 2 {
                 // Sort participants by score descending to determine placement
-                let mut sorted: Vec<(usize, &crate::db::MatchParticipant)> =
-                    participants.iter().enumerate().collect();
+                let mut sorted: Vec<&crate::db::MatchParticipant> =
+                    participants.iter().collect();
                 sorted.sort_by(|a, b| {
-                    let score_a = result.player_scores.get(a.0).map(|s| s.score).unwrap_or(0);
-                    let score_b = result.player_scores.get(b.0).map(|s| s.score).unwrap_or(0);
+                    let score_a = result.player_scores.iter()
+                        .find(|s| s.bot_version_id == a.bot_version_id)
+                        .map(|s| s.score).unwrap_or(0);
+                    let score_b = result.player_scores.iter()
+                        .find(|s| s.bot_version_id == b.bot_version_id)
+                        .map(|s| s.score).unwrap_or(0);
                     score_b.cmp(&score_a)
                 });
 
                 let n_players = participants.len() as i32;
-                for (placement_idx, (_orig_idx, p)) in sorted.iter().enumerate() {
+                for (placement_idx, p) in sorted.iter().enumerate() {
                     let placement = (placement_idx + 1) as i32;
                     let points = crate::elo::ffa_placement_points(placement, n_players);
                     let _ = db.update_version_ffa_stats(p.bot_version_id, points).await;
@@ -1965,18 +1968,19 @@ pub fn build_game_completion_callback(
             if let Ok(Some((tournament_id, round))) =
                 db_cb.get_tournament_for_match(match_id_cb).await
             {
-                // Save tournament results for each participant
-                for (i, p) in participants.iter().enumerate() {
-                    let score = result.player_scores.get(i).map(|s| s.score).unwrap_or(0);
+                // Save tournament results for each participant (match by bot_version_id)
+                for p in participants.iter() {
+                    let ps = result.player_scores.iter().find(|s| s.bot_version_id == p.bot_version_id);
+                    let score = ps.map(|s| s.score).unwrap_or(0);
                     let _ = db_cb
                         .add_tournament_result(
                             tournament_id,
-                            i as i32,
+                            p.player_slot,
                             p.bot_version_id,
                             score,
-                            0,
-                            0,
-                            0,
+                            ps.map(|s| s.creatures_spawned).unwrap_or(0),
+                            ps.map(|s| s.creatures_killed).unwrap_or(0),
+                            ps.map(|s| s.creatures_lost).unwrap_or(0),
                         )
                         .await;
                 }
