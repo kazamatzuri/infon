@@ -49,18 +49,26 @@ export function TournamentDetail() {
     try {
       setLoading(true);
       setError(null);
-      const [t, e, b] = await Promise.all([
+      const [t, e] = await Promise.all([
         api.getTournament(tournamentId),
         api.listEntries(tournamentId),
-        api.listBots(),
       ]);
       setTournament(t);
       setEntries(e);
-      setBots(b);
       setSelectedFormat(t.format || 'round_robin');
 
+      // Only load bots list when logged in (needed for "Add Entry" form)
+      if (user) {
+        try {
+          const b = await api.listBots();
+          setBots(b);
+        } catch {
+          // Non-critical — user can still view the tournament
+        }
+      }
+
       // Load standings and matches if tournament has been run
-      if (t.status === 'finished' || t.status === 'running') {
+      if (t.status === 'finished' || t.status === 'running' || t.status === 'abandoned') {
         try {
           const [r, s, matchesResp] = await Promise.all([
             api.getResults(tournamentId),
@@ -79,7 +87,7 @@ export function TournamentDetail() {
     } finally {
       setLoading(false);
     }
-  }, [tournamentId]);
+  }, [tournamentId, user]);
 
   useEffect(() => {
     loadData();

@@ -325,6 +325,9 @@ export interface PlayerSnapshot {
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Please log in to access this content.');
+    }
     const text = await response.text().catch(() => 'Unknown error');
     throw new Error(`API error ${response.status}: ${text}`);
   }
