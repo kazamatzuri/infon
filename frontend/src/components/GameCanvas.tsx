@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import type { WorldMsg, SnapshotMsg, SnapshotDeltaMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg, MatchDetail, CreatureSnapshot } from '../api/client';
+import type { WorldMsg, SnapshotMsg, SnapshotDeltaMsg, GameEndMsg, PlayerSnapshot, PlayerLoadErrorMsg, MatchDetail, CreatureSnapshot, BroadcastEvent } from '../api/client';
 import { api } from '../api/client';
 import {
   getTileSpriteForGfx, isSnowGfx,
@@ -66,10 +66,12 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
   const [connected, setConnected] = useState(false);
   const animFrameRef = useRef<number>(0);
   const [playerLoadErrors, setPlayerLoadErrors] = useState<PlayerLoadErrorMsg[]>([]);
-  const [sidebarTab, setSidebarTab] = useState<'scores' | 'console'>('scores');
+  const [sidebarTab, setSidebarTab] = useState<'scores' | 'console' | 'events'>('scores');
   const consoleLogRef = useRef<Map<number, string[]>>(new Map());
   const [consoleLogs, setConsoleLogs] = useState<Map<number, string[]>>(new Map());
   const [matchDetail, setMatchDetail] = useState<MatchDetail | null>(null);
+  const eventLogRef = useRef<{ time: number; event: BroadcastEvent }[]>([]);
+  const [eventLog, setEventLog] = useState<{ time: number; event: BroadcastEvent }[]>([]);
   const onGameEndRef = useRef(onGameEnd);
 
 
@@ -292,6 +294,13 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
               }
               if (hasNew) setConsoleLogs(new Map(consoleLogRef.current));
             }
+            // Accumulate broadcast events
+            if (msg.events && msg.events.length > 0) {
+              const newEntries = msg.events.map((e: BroadcastEvent) => ({ time: msg.game_time, event: e }));
+              const combined = [...newEntries, ...eventLogRef.current].slice(0, 200);
+              eventLogRef.current = combined;
+              setEventLog(combined);
+            }
             break;
           case 'snapshot_delta': {
             // Merge delta with last full snapshot
@@ -337,6 +346,13 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
                 }
               }
               if (hasNew) setConsoleLogs(new Map(consoleLogRef.current));
+            }
+            // Accumulate broadcast events from delta
+            if (delta.events && delta.events.length > 0) {
+              const newEntries = delta.events.map((e: BroadcastEvent) => ({ time: delta.game_time, event: e }));
+              const combined = [...newEntries, ...eventLogRef.current].slice(0, 200);
+              eventLogRef.current = combined;
+              setEventLog(combined);
             }
             break;
           }
@@ -525,7 +541,7 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
       <div style={{ width: '240px', background: '#16213e', borderLeft: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
         {/* Tab strip */}
         <div style={{ display: 'flex', borderBottom: '1px solid #333' }}>
-          {(['scores', 'console'] as const).map(tab => (
+          {(['scores', 'console', 'events'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setSidebarTab(tab)}
@@ -591,32 +607,39 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
                   )}
                   {players
                     .sort((a, b) => b.score - a.score)
-                    .map(p => (
-                      <div key={p.id} style={{
-                        padding: '8px',
-                        marginBottom: '8px',
-                        background: '#0a0a1a',
-                        borderRadius: '6px',
-                        borderLeft: `3px solid ${PLAYER_COLORS[p.id % PLAYER_COLORS.length]}`,
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{
-                            display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
-                            background: PLAYER_COLORS[p.id % PLAYER_COLORS.length],
-                          }} />
-                          <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+                    .map(p => {
+                      const dead = p.num_creatures === 0;
+                      const playerColor = PLAYER_COLORS[p.id % PLAYER_COLORS.length];
+                      return (
+                        <div key={p.id} style={{
+                          padding: '8px',
+                          marginBottom: '8px',
+                          background: '#0a0a1a',
+                          borderRadius: '6px',
+                          borderLeft: `3px solid ${dead ? '#444' : playerColor}`,
+                          opacity: dead ? 0.5 : 1,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{
+                              display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0,
+                              background: dead ? '#444' : playerColor,
+                            }} />
+                            <span style={{ color: dead ? '#666' : '#e0e0e0', fontWeight: 600, fontSize: '14px' }}>{p.name}</span>
+                            {dead && <span style={{ fontSize: '13px', marginLeft: '2px' }} title="Eliminated">&#x1F480;</span>}
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                            <span style={{ color: dead ? '#555' : '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
+                            <span style={{ color: dead ? '#555' : '#888', fontSize: '13px' }}>
+                              {dead ? 'Eliminated' : `${p.num_creatures} units`}
+                            </span>
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                          <span style={{ color: '#16c79a', fontSize: '13px' }}>{p.score} pts</span>
-                          <span style={{ color: '#888', fontSize: '13px' }}>{p.num_creatures} units</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                 </>
               )}
             </>
-          ) : (
-            // Console tab
+          ) : sidebarTab === 'console' ? (
             <div>
               {players.length === 0 ? (
                 <p style={{ color: '#666', fontSize: '13px' }}>Waiting for game data...</p>
@@ -646,6 +669,64 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
                           ))
                         )}
                       </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            // Events tab
+            <div>
+              {eventLog.length === 0 ? (
+                <p style={{ color: '#666', fontSize: '13px' }}>No events yet...</p>
+              ) : (
+                eventLog.map((entry, i) => {
+                  const e = entry.event;
+                  const timeSec = Math.floor(entry.time / 1000);
+                  let icon: string;
+                  let text: string;
+                  let borderColor: string;
+
+                  switch (e.kind) {
+                    case 'Spawn':
+                      icon = '+';
+                      text = `${e.player_name} spawned a creature`;
+                      borderColor = PLAYER_COLORS[e.player_id % PLAYER_COLORS.length];
+                      break;
+                    case 'Kill':
+                      if (e.starvation) {
+                        icon = '\u2620'; // skull
+                        text = `${e.player_name}'s creature starved`;
+                      } else if (e.killer_player_id === e.player_id) {
+                        icon = '\u2620';
+                        text = `${e.player_name}'s creature suicided`;
+                      } else {
+                        icon = '\u2694'; // crossed swords
+                        text = `${e.killer_player_name ?? '?'} killed ${e.player_name}'s creature`;
+                      }
+                      borderColor = PLAYER_COLORS[e.player_id % PLAYER_COLORS.length];
+                      break;
+                    case 'PlayerJoined':
+                      icon = '\u25B6'; // play arrow
+                      text = `${e.player_name} joined`;
+                      borderColor = PLAYER_COLORS[e.player_id % PLAYER_COLORS.length];
+                      break;
+                  }
+
+                  return (
+                    <div key={i} style={{
+                      padding: '4px 6px',
+                      marginBottom: '2px',
+                      borderLeft: `3px solid ${borderColor}`,
+                      fontSize: '11px',
+                      fontFamily: 'monospace',
+                      display: 'flex',
+                      gap: '4px',
+                      alignItems: 'baseline',
+                    }}>
+                      <span style={{ color: '#666', flexShrink: 0 }}>{timeSec}s</span>
+                      <span style={{ flexShrink: 0 }}>{icon}</span>
+                      <span style={{ color: '#bbb' }}>{text}</span>
                     </div>
                   );
                 })

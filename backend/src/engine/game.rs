@@ -39,6 +39,30 @@ pub enum GameEvent {
     PlayerCreated { player_id: u32 },
 }
 
+/// Events broadcast to WebSocket clients for the event ticker.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind")]
+pub enum BroadcastEvent {
+    Spawn {
+        creature_id: u32,
+        player_id: u32,
+        player_name: String,
+        creature_type: u8,
+    },
+    Kill {
+        creature_id: u32,
+        player_id: u32,
+        player_name: String,
+        killer_player_id: Option<u32>,
+        killer_player_name: Option<String>,
+        starvation: bool,
+    },
+    PlayerJoined {
+        player_id: u32,
+        player_name: String,
+    },
+}
+
 /// Snapshot of a creature for rendering / API consumers.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct CreatureSnapshot {
@@ -93,6 +117,8 @@ pub struct GameSnapshot {
     pub creatures: Vec<CreatureSnapshot>,
     pub players: Vec<PlayerSnapshot>,
     pub king_player_id: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<BroadcastEvent>,
 }
 
 /// Delta snapshot: only creatures that changed since the last full snapshot.
@@ -107,6 +133,8 @@ pub struct GameSnapshotDelta {
     /// Player data (always sent in full since it's small).
     pub players: Vec<PlayerSnapshot>,
     pub king_player_id: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<BroadcastEvent>,
 }
 
 /// Tick timing data for observability and budget monitoring.
@@ -138,6 +166,8 @@ pub struct Game {
     pub player_names: Rc<RefCell<HashMap<u32, String>>>,
     /// Pending events per player (player_id -> events)
     pending_events: HashMap<u32, Vec<GameEvent>>,
+    /// Events to broadcast to WebSocket clients (drained each snapshot).
+    broadcast_events: Vec<BroadcastEvent>,
     /// Per-player statistics (spawns, kills, losses)
     player_stats: HashMap<u32, PlayerStats>,
     /// Spatial index for fast creature proximity queries. Rebuilt each tick.
@@ -163,6 +193,7 @@ impl Game {
             player_scores: Rc::new(RefCell::new(HashMap::new())),
             player_names: Rc::new(RefCell::new(HashMap::new())),
             pending_events: HashMap::new(),
+            broadcast_events: Vec::new(),
             player_stats: HashMap::new(),
             spatial_grid: Rc::new(RefCell::new(grid)),
             last_tick_timings: TickTimings::default(),
@@ -228,6 +259,12 @@ impl Game {
             .entry(player_id)
             .or_default()
             .push(GameEvent::PlayerCreated { player_id });
+
+        // Broadcast player joined event
+        self.broadcast_events.push(BroadcastEvent::PlayerJoined {
+            player_id,
+            player_name: name.to_string(),
+        });
 
         Ok(player_id)
     }
@@ -302,6 +339,15 @@ impl Game {
             .or_default()
             .push(GameEvent::CreatureSpawned { id, parent: -1 });
 
+        // Broadcast spawn event
+        let player_name = self.player_names.borrow().get(&player_id).cloned().unwrap_or_default();
+        self.broadcast_events.push(BroadcastEvent::Spawn {
+            creature_id: id,
+            player_id,
+            player_name,
+            creature_type,
+        });
+
         Some(id)
     }
 
@@ -345,6 +391,15 @@ impl Game {
                 id,
                 parent: parent_id as i32,
             });
+
+        // Broadcast spawn event
+        let player_name = self.player_names.borrow().get(&player_id).cloned().unwrap_or_default();
+        self.broadcast_events.push(BroadcastEvent::Spawn {
+            creature_id: id,
+            player_id,
+            player_name,
+            creature_type,
+        });
 
         Some(id)
     }
@@ -431,6 +486,33 @@ impl Game {
                     id: creature_id,
                     killer: killer_id.map(|k| k as i32).unwrap_or(-1),
                 });
+
+            // Broadcast kill event
+            {
+                let names = self.player_names.borrow();
+                let player_name = names.get(&player_id).cloned().unwrap_or_default();
+                let starvation = killer_id.is_none();
+                let (killer_player_id, killer_player_name) = if let Some(kid) = killer_id {
+                    if kid == creature_id {
+                        // Suicide — killer is self
+                        (Some(player_id), Some(player_name.clone()))
+                    } else {
+                        let kpid = self.creatures.borrow().get(&kid).map(|c| c.player_id);
+                        let kname = kpid.and_then(|id| names.get(&id).cloned());
+                        (kpid, kname)
+                    }
+                } else {
+                    (None, None)
+                };
+                self.broadcast_events.push(BroadcastEvent::Kill {
+                    creature_id,
+                    player_id,
+                    player_name,
+                    killer_player_id,
+                    killer_player_name,
+                    starvation,
+                });
+            }
 
             // Drop food on tile
             let creatures = self.creatures.borrow();
@@ -1061,11 +1143,14 @@ impl Game {
             })
             .collect();
 
+        let events = std::mem::take(&mut self.broadcast_events);
+
         GameSnapshot {
             game_time: self.game_time,
             creatures: creature_snapshots,
             players: player_snapshots,
             king_player_id: self.king_player_id,
+            events,
         }
     }
 
@@ -1106,6 +1191,7 @@ impl Game {
             removed,
             players: current.players.clone(),
             king_player_id: current.king_player_id,
+            events: current.events.clone(),
         }
     }
 
@@ -1512,6 +1598,7 @@ mod tests {
             }],
             players: vec![],
             king_player_id: None,
+            events: vec![],
         };
 
         let delta = Game::compute_delta(&snap, &snap);
@@ -1538,6 +1625,7 @@ mod tests {
             }],
             players: vec![],
             king_player_id: None,
+            events: vec![],
         };
 
         let mut current = prev.clone();
@@ -1570,6 +1658,7 @@ mod tests {
             }],
             players: vec![],
             king_player_id: None,
+            events: vec![],
         };
 
         let mut current = prev.clone();
@@ -1628,6 +1717,7 @@ mod tests {
             ],
             players: vec![],
             king_player_id: None,
+            events: vec![],
         };
 
         let mut current = prev.clone();

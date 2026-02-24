@@ -609,6 +609,7 @@ mod tests {
                 output: vec![],
             }],
             king_player_id: Some(1),
+            events: vec![],
         };
         let msg = GameMessage::Snapshot(snap);
         let json = serde_json::to_string(&msg).unwrap();

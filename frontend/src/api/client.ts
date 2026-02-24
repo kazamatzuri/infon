@@ -228,6 +228,12 @@ export interface TournamentMatchesResponse {
   rounds: TournamentRound[];
 }
 
+// Broadcast events for event ticker
+export type BroadcastEvent =
+  | { kind: 'Spawn'; creature_id: number; player_id: number; player_name: string; creature_type: number }
+  | { kind: 'Kill'; creature_id: number; player_id: number; player_name: string; killer_player_id?: number; killer_player_name?: string; starvation: boolean }
+  | { kind: 'PlayerJoined'; player_id: number; player_name: string };
+
 // WebSocket message types
 export interface WorldMsg {
   type: 'world';
@@ -244,6 +250,7 @@ export interface SnapshotMsg {
   creatures: CreatureSnapshot[];
   players: PlayerSnapshot[];
   king_player_id?: number;
+  events?: BroadcastEvent[];
 }
 
 export interface PlayerEndStats {
@@ -280,6 +287,7 @@ export interface SnapshotDeltaMsg {
   removed: number[];
   players: PlayerSnapshot[];
   king_player_id?: number;
+  events?: BroadcastEvent[];
 }
 
 export interface Feedback {
