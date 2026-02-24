@@ -154,7 +154,7 @@ export function MatchDetail() {
           ))}
       </div>
 
-      {m.status === 'finished' && (
+      {(m.status === 'finished' || m.status === 'abandoned') && (
         <div>
           {replayError && (
             <div style={{ color: '#e94560', marginBottom: '8px', fontSize: '13px' }}>{replayError}</div>

@@ -144,6 +144,8 @@ pub fn spawn_queue_worker(
             }
 
             if !ok {
+                // Mark the match as abandoned so it doesn't stay stuck in 'running'
+                let _ = db.finish_match(entry.match_id, None).await;
                 continue;
             }
 
@@ -152,6 +154,7 @@ pub fn spawn_queue_worker(
                 Ok(w) => w,
                 Err(e) => {
                     tracing::error!("Queue worker: invalid map: {e}");
+                    let _ = db.finish_match(entry.match_id, None).await;
                     continue;
                 }
             };
@@ -184,6 +187,7 @@ pub fn spawn_queue_worker(
                 Some(on_complete),
             ) {
                 tracing::error!("Queue worker: failed to start game: {e}");
+                let _ = db.finish_match(entry.match_id, None).await;
             } else {
                 game_server.set_game_map(&map_name);
             }
