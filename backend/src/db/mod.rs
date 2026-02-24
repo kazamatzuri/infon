@@ -66,6 +66,9 @@ pub struct BotVersion {
     /// Serialized as boolean for API consumers.
     #[serde(serialize_with = "serialize_int_as_bool")]
     pub is_archived: i32,
+    /// Whether this version failed to load in a game (e.g. Lua syntax error).
+    #[serde(serialize_with = "serialize_int_as_bool")]
+    pub is_faulty: i32,
     pub elo_rating: i32,
     pub elo_1v1: i32,
     pub elo_peak: i32,
@@ -162,6 +165,26 @@ pub struct TournamentMatch {
     pub tournament_id: i64,
     pub match_id: i64,
     pub round: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TournamentMatchDetail {
+    pub match_id: i64,
+    pub round: i32,
+    pub status: String,
+    pub winner_bot_version_id: Option<i64>,
+    pub finished_at: Option<String>,
+    pub participants: Vec<TournamentMatchParticipantInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TournamentMatchParticipantInfo {
+    pub match_id: i64,
+    pub bot_version_id: i64,
+    pub player_slot: i32,
+    pub final_score: i32,
+    pub bot_name: Option<String>,
+    pub owner_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -317,6 +340,7 @@ impl Database {
                 code TEXT NOT NULL,
                 api_type TEXT NOT NULL DEFAULT 'oo',
                 is_archived INTEGER NOT NULL DEFAULT 0,
+                is_faulty INTEGER NOT NULL DEFAULT 0,
                 elo_rating INTEGER NOT NULL DEFAULT 1500,
                 elo_1v1 INTEGER NOT NULL DEFAULT 1500,
                 elo_peak INTEGER NOT NULL DEFAULT 1500,
@@ -502,6 +526,7 @@ impl Database {
                 code TEXT NOT NULL,
                 api_type TEXT NOT NULL DEFAULT 'oo',
                 is_archived INTEGER NOT NULL DEFAULT 0,
+                is_faulty INTEGER NOT NULL DEFAULT 0,
                 elo_rating INTEGER NOT NULL DEFAULT 1500,
                 elo_1v1 INTEGER NOT NULL DEFAULT 1500,
                 elo_peak INTEGER NOT NULL DEFAULT 1500,
@@ -523,6 +548,7 @@ impl Database {
         // Add new columns to existing bot_versions if missing
         for col in &[
             "is_archived INTEGER NOT NULL DEFAULT 0",
+            "is_faulty INTEGER NOT NULL DEFAULT 0",
             "elo_rating INTEGER NOT NULL DEFAULT 1500",
             "elo_1v1 INTEGER NOT NULL DEFAULT 1500",
             "elo_peak INTEGER NOT NULL DEFAULT 1500",
@@ -977,7 +1003,7 @@ impl Database {
         };
 
         let row = sqlx::query_as::<_, BotVersion>(
-            "INSERT INTO bot_versions (bot_id, version, code, elo_rating, elo_1v1, elo_peak) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
+            "INSERT INTO bot_versions (bot_id, version, code, elo_rating, elo_1v1, elo_peak) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, bot_id, version, code, api_type, is_archived, is_faulty, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at",
         )
         .bind(bot_id)
         .bind(next_version)
@@ -992,7 +1018,7 @@ impl Database {
 
     pub async fn list_bot_versions(&self, bot_id: i64) -> Result<Vec<BotVersion>, sqlx::Error> {
         let rows = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = $1 ORDER BY version",
+            "SELECT id, bot_id, version, code, api_type, is_archived, is_faulty, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = $1 ORDER BY version",
         )
         .bind(bot_id)
         .fetch_all(&self.pool)
@@ -1006,7 +1032,7 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = $1 AND id = $2",
+            "SELECT id, bot_id, version, code, api_type, is_archived, is_faulty, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE bot_id = $1 AND id = $2",
         )
         .bind(bot_id)
         .bind(version_id)
@@ -1021,7 +1047,7 @@ impl Database {
         version_id: i64,
     ) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT id, bot_id, version, code, api_type, is_archived, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE id = $1",
+            "SELECT id, bot_id, version, code, api_type, is_archived, is_faulty, elo_rating, elo_1v1, elo_peak, games_played, wins, losses, draws, ffa_placement_points, ffa_games, creatures_spawned, creatures_killed, creatures_lost, total_score, created_at FROM bot_versions WHERE id = $1",
         )
         .bind(version_id)
         .fetch_optional(&self.pool)
@@ -1061,9 +1087,22 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn mark_version_faulty(
+        &self,
+        version_id: i64,
+        faulty: bool,
+    ) -> Result<bool, sqlx::Error> {
+        let result: AnyQueryResult = sqlx::query("UPDATE bot_versions SET is_faulty = $1 WHERE id = $2")
+            .bind(faulty as i32)
+            .bind(version_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn get_active_version(&self, bot_id: i64) -> Result<Option<BotVersion>, sqlx::Error> {
         let row = sqlx::query_as::<_, BotVersion>(
-            "SELECT bv.id, bv.bot_id, bv.version, bv.code, bv.api_type, bv.is_archived, bv.elo_rating, bv.elo_1v1, bv.elo_peak, bv.games_played, bv.wins, bv.losses, bv.draws, bv.ffa_placement_points, bv.ffa_games, bv.creatures_spawned, bv.creatures_killed, bv.creatures_lost, bv.total_score, bv.created_at FROM bot_versions bv JOIN bots b ON b.active_version_id = bv.id WHERE b.id = $1",
+            "SELECT bv.id, bv.bot_id, bv.version, bv.code, bv.api_type, bv.is_archived, bv.is_faulty, bv.elo_rating, bv.elo_1v1, bv.elo_peak, bv.games_played, bv.wins, bv.losses, bv.draws, bv.ffa_placement_points, bv.ffa_games, bv.creatures_spawned, bv.creatures_killed, bv.creatures_lost, bv.total_score, bv.created_at FROM bot_versions bv JOIN bots b ON b.active_version_id = bv.id WHERE b.id = $1",
         )
         .bind(bot_id)
         .fetch_optional(&self.pool)
@@ -1556,6 +1595,37 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    pub async fn get_tournament_matches_detail(
+        &self,
+        tournament_id: i64,
+    ) -> Result<Vec<TournamentMatchDetail>, sqlx::Error> {
+        let tm_rows = self.list_tournament_matches(tournament_id).await?;
+        let mut details = Vec::new();
+        for tm in &tm_rows {
+            let m = self.get_match(tm.match_id).await?;
+            let match_info = match m {
+                Some(m) => m,
+                None => continue,
+            };
+            let participants = sqlx::query_as::<_, TournamentMatchParticipantInfo>(
+                "SELECT mp.match_id, mp.bot_version_id, mp.player_slot, mp.final_score, b.name AS bot_name, u.username AS owner_name FROM match_participants mp LEFT JOIN bot_versions bv ON bv.id = mp.bot_version_id LEFT JOIN bots b ON b.id = bv.bot_id LEFT JOIN users u ON u.id = b.owner_id WHERE mp.match_id = $1 ORDER BY mp.player_slot",
+            )
+            .bind(tm.match_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+            details.push(TournamentMatchDetail {
+                match_id: tm.match_id,
+                round: tm.round,
+                status: match_info.status,
+                winner_bot_version_id: match_info.winner_bot_version_id,
+                finished_at: match_info.finished_at,
+                participants,
+            });
+        }
+        Ok(details)
     }
 
     /// Returns (tournament_id, round) for a match if it belongs to a tournament.

@@ -22,6 +22,8 @@ pub struct GameResult {
     pub player_scores: Vec<PlayerScore>,
     pub replay_data: Vec<u8>,
     pub tick_count: i32,
+    /// Bot version IDs that failed to load (e.g. Lua syntax error).
+    pub failed_bot_version_ids: Vec<i64>,
 }
 
 /// Score data for one player in a completed game.
@@ -312,13 +314,17 @@ impl GameServer {
 
                 // Add players and spawn initial creatures
                 let mut player_ids = Vec::new();
-                for entry in &players {
+                let mut failed_version_ids: Vec<i64> = Vec::new();
+                for (i, entry) in players.iter().enumerate() {
                     match game.add_player(&entry.name, &entry.code) {
                         Ok(pid) => {
                             player_ids.push(pid);
                         }
                         Err(e) => {
                             tracing::error!("Failed to add player '{}': {}", entry.name, e);
+                            if let Some(&vid) = bot_version_ids.get(i) {
+                                failed_version_ids.push(vid);
+                            }
                             let err_msg = GameMessage::PlayerLoadError {
                                 player_name: entry.name.clone(),
                                 error: e.to_string(),
@@ -329,6 +335,9 @@ impl GameServer {
                         }
                     }
                 }
+
+                // If too few players loaded successfully, skip the game loop
+                let early_exit = player_ids.len() <= 1 && players.len() >= 2;
 
                 // Auto-generate food spawners if the map has none
                 game.ensure_food_spawners();
@@ -364,7 +373,20 @@ impl GameServer {
                 let mut prev_snapshot: Option<GameSnapshot> = None;
                 const FULL_SNAPSHOT_INTERVAL: u64 = 10;
 
-                while running.load(Ordering::Relaxed) && tick_count < max_ticks {
+                // Skip game loop if not enough players loaded
+                if early_exit {
+                    tracing::info!(
+                        "Only {} of {} players loaded — skipping game loop",
+                        player_ids.len(),
+                        players.len()
+                    );
+                    // If exactly 1 player loaded, they win by default
+                    if player_ids.len() == 1 {
+                        winner = Some(player_ids[0]);
+                    }
+                }
+
+                while !early_exit && running.load(Ordering::Relaxed) && tick_count < max_ticks {
                     let tick_start = std::time::Instant::now();
                     game.tick();
                     let tick_elapsed_ms = tick_start.elapsed().as_secs_f64() * 1000.0;
@@ -482,6 +504,7 @@ impl GameServer {
                         player_scores,
                         replay_data: recorder.finish(),
                         tick_count: tick_count as i32,
+                        failed_bot_version_ids: failed_version_ids.clone(),
                     };
 
                     callback(game_result);

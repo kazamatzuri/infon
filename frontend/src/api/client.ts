@@ -29,6 +29,7 @@ export interface BotVersion {
   version: number;
   code: string;
   is_archived: boolean;
+  is_faulty: boolean;
   elo_rating: number;
   elo_1v1: number;
   elo_peak: number;
@@ -199,6 +200,32 @@ export interface TournamentResult {
   creatures_killed: number;
   creatures_lost: number;
   finished_at: string;
+}
+
+export interface TournamentMatchParticipant {
+  bot_version_id: number;
+  player_slot: number;
+  final_score: number;
+  bot_name: string | null;
+  owner_name: string | null;
+}
+
+export interface TournamentMatchInfo {
+  match_id: number;
+  round: number;
+  status: string;
+  winner_bot_version_id: number | null;
+  finished_at: string | null;
+  participants: TournamentMatchParticipant[];
+}
+
+export interface TournamentRound {
+  round: number;
+  matches: TournamentMatchInfo[];
+}
+
+export interface TournamentMatchesResponse {
+  rounds: TournamentRound[];
 }
 
 // WebSocket message types
@@ -394,6 +421,9 @@ export const api = {
 
   getResults: (tournamentId: number): Promise<TournamentResult[]> =>
     fetch(`${BASE_URL}/api/tournaments/${tournamentId}/results`, { headers: authHeaders() }).then(r => handleResponse<TournamentResult[]>(r)),
+
+  getTournamentMatches: (tournamentId: number): Promise<TournamentMatchesResponse> =>
+    fetch(`${BASE_URL}/api/tournaments/${tournamentId}/matches`, { headers: authHeaders() }).then(r => handleResponse<TournamentMatchesResponse>(r)),
 
   // Game
   gameStatus: (): Promise<{ running: boolean }> =>

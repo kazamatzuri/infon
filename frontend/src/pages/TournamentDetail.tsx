@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import type { Tournament, TournamentEntry, TournamentResult, TournamentStanding, Bot, BotVersion } from '../api/client';
+import type { Tournament, TournamentEntry, TournamentResult, TournamentStanding, TournamentRound, Bot, BotVersion } from '../api/client';
+import { TournamentBracket } from '../components/tournament/TournamentBracket';
 
 const FORMAT_OPTIONS = [
   { value: 'round_robin', label: 'Round Robin' },
@@ -28,8 +29,10 @@ export function TournamentDetail() {
 
   const [tournament, setTournament] = useState<Tournament | null>(null);
   const [entries, setEntries] = useState<TournamentEntry[]>([]);
-  const [results, setResults] = useState<TournamentResult[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_results, setResults] = useState<TournamentResult[]>([]);
   const [standings, setStandings] = useState<TournamentStanding[]>([]);
+  const [tournamentRounds, setTournamentRounds] = useState<TournamentRound[]>([]);
   const [bots, setBots] = useState<Bot[]>([]);
   const [versions, setVersions] = useState<BotVersion[]>([]);
   const [selectedBotId, setSelectedBotId] = useState<number | ''>('');
@@ -56,15 +59,17 @@ export function TournamentDetail() {
       setBots(b);
       setSelectedFormat(t.format || 'round_robin');
 
-      // Load standings if tournament has been run
+      // Load standings and matches if tournament has been run
       if (t.status === 'finished' || t.status === 'running') {
         try {
-          const [r, s] = await Promise.all([
+          const [r, s, matchesResp] = await Promise.all([
             api.getResults(tournamentId),
             api.getStandings(tournamentId),
+            api.getTournamentMatches(tournamentId),
           ]);
           setResults(r);
           setStandings(s);
+          setTournamentRounds(matchesResp.rounds);
         } catch {
           // Results/standings may not be available yet
         }
@@ -87,7 +92,10 @@ export function TournamentDetail() {
       setSelectedVersionId('');
       return;
     }
-    api.listVersions(selectedBotId as number).then(setVersions).catch(() => setVersions([]));
+    api.listVersions(selectedBotId as number).then(v => {
+      setVersions(v);
+      if (v.length > 0) setSelectedVersionId(v[v.length - 1].id);
+    }).catch(() => setVersions([]));
   }, [selectedBotId]);
 
   const handleAddEntry = async () => {
@@ -140,7 +148,7 @@ export function TournamentDetail() {
   if (!tournament) return <p style={{ padding: '24px', color: '#888' }}>Tournament not found</p>;
 
   return (
-    <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto' }}>
+    <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       <button onClick={() => navigate('/tournaments')} style={{ ...btnLink, marginBottom: '16px' }}>
         &larr; Back to Tournaments
       </button>
@@ -263,7 +271,7 @@ export function TournamentDetail() {
             >
               <option value="">Select version...</option>
               {versions.map(v => (
-                <option key={v.id} value={v.id}>v{v.version} - {new Date(v.created_at).toLocaleString()}</option>
+                <option key={v.id} value={v.id}>v{v.version} - {new Date(v.created_at).toLocaleString()}{v.is_faulty ? ' (faulty)' : ''}</option>
               ))}
             </select>
             <input
@@ -312,36 +320,17 @@ export function TournamentDetail() {
         </>
       )}
 
-      {/* Results */}
-      {results.length > 0 && (
+      {/* Match Bracket / Results */}
+      {tournamentRounds.length > 0 && tournament && (
         <>
           <h3 style={{ color: '#aaa', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
-            Results
+            Matches
           </h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #333' }}>
-                <th style={thStyle}>Rank</th>
-                <th style={thStyle}>Bot</th>
-                <th style={thStyle}>Score</th>
-                <th style={thStyle}>Spawned</th>
-                <th style={thStyle}>Kills</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...results]
-                .sort((a, b) => b.final_score - a.final_score)
-                .map((r, i) => (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #222' }}>
-                    <td style={tdStyle}>#{i + 1}</td>
-                    <td style={{ ...tdStyle, color: '#16c79a' }}>Slot {r.player_slot} (v#{r.bot_version_id})</td>
-                    <td style={tdStyle}>{r.final_score}</td>
-                    <td style={tdStyle}>{r.creatures_spawned}</td>
-                    <td style={tdStyle}>{r.creatures_killed}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+          <TournamentBracket
+            format={tournament.format}
+            rounds={tournamentRounds}
+            standings={standings}
+          />
         </>
       )}
     </div>

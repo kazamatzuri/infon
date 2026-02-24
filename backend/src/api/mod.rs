@@ -227,6 +227,7 @@ pub fn router(
         )
         // Tournament results
         .route("/api/tournaments/{id}/results", get(get_tournament_results))
+        .route("/api/tournaments/{id}/matches", get(get_tournament_matches))
         // Tournament run
         .route("/api/tournaments/{id}/run", post(run_tournament))
         // Leaderboards
@@ -552,7 +553,8 @@ async fn get_bot_stats(
                         } else {
                             0.0
                         },
-                        "is_archived": v.is_archived != 0, // bool for JSON compat
+                        "is_archived": v.is_archived != 0,
+                        "is_faulty": v.is_faulty != 0,
                     })
                 })
                 .collect();
@@ -792,6 +794,42 @@ async fn get_tournament_results(
     }
     match state.db.get_tournament_results(tournament_id).await {
         Ok(results) => (StatusCode::OK, Json(json!(results))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+// ── Tournament matches detail handler ─────────────────────────────
+
+async fn get_tournament_matches(
+    State(state): State<AppState>,
+    Path(tournament_id): Path<i64>,
+) -> impl IntoResponse {
+    match state.db.get_tournament(tournament_id).await {
+        Ok(None) => {
+            return json_error(StatusCode::NOT_FOUND, "Tournament not found").into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match state.db.get_tournament_matches_detail(tournament_id).await {
+        Ok(details) => {
+            // Group by round
+            let mut rounds_map: std::collections::BTreeMap<i32, Vec<&crate::db::TournamentMatchDetail>> =
+                std::collections::BTreeMap::new();
+            for d in &details {
+                rounds_map.entry(d.round).or_default().push(d);
+            }
+            let rounds: Vec<serde_json::Value> = rounds_map
+                .into_iter()
+                .map(|(round, matches)| {
+                    json!({
+                        "round": round,
+                        "matches": matches,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "rounds": rounds }))).into_response()
+        }
         Err(e) => internal_error(e).into_response(),
     }
 }
@@ -1732,6 +1770,13 @@ pub fn build_game_completion_callback(
                 .await
             {
                 tracing::error!("Failed to save replay for match {match_id}: {e}");
+            }
+
+            // 1b. Mark faulty bot versions
+            for &vid in &result.failed_bot_version_ids {
+                if let Err(e) = db.mark_version_faulty(vid, true).await {
+                    tracing::error!("Failed to mark version {vid} as faulty: {e}");
+                }
             }
 
             // 2. Determine winner bot_version_id
