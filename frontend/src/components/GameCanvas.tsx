@@ -456,7 +456,7 @@ export function GameCanvas({ wsUrl, onGameEnd, onNewGame }: GameCanvasProps) {
 
               {sorted.map((p, i) => {
                 const stats = gameEnd.player_stats?.find(s => s.player_id === p.id);
-                const elo = eloMap.get(i);
+                const elo = eloMap.get(p.id);
                 const isWinner = gameEnd.winner != null && p.id === gameEnd.winner;
                 return (
                   <div key={p.id} style={{

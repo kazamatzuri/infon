@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { ActiveGameInfo } from '../api/client';
 
@@ -60,7 +60,23 @@ export function GameList() {
 
   return (
     <div style={{ padding: '24px', maxWidth: '960px', margin: '0 auto' }}>
-      <h2 style={{ color: '#e0e0e0', marginBottom: '24px' }}>Games</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <h2 style={{ color: '#e0e0e0', margin: 0 }}>Games</h2>
+        <Link
+          to="/game"
+          style={{
+            padding: '8px 20px',
+            background: '#16c79a',
+            color: '#fff',
+            borderRadius: '4px',
+            textDecoration: 'none',
+            fontWeight: 600,
+            fontSize: '14px',
+          }}
+        >
+          New Game
+        </Link>
+      </div>
 
       {error && (
         <div style={{
