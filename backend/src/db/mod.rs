@@ -1123,6 +1123,28 @@ impl Database {
         Ok(row)
     }
 
+    /// Mark any matches still in 'running' status as 'abandoned'.
+    /// Called at startup to clean up orphaned matches from prior server runs.
+    pub async fn cleanup_orphaned_matches(&self) -> Result<u64, sqlx::Error> {
+        let sql = format!(
+            "UPDATE matches SET status = 'abandoned', finished_at = {} WHERE status = 'running'",
+            self.now_expr()
+        );
+        let result: AnyQueryResult = sqlx::query(&sql)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Mark any tournaments still in 'running' status as 'abandoned'.
+    pub async fn cleanup_orphaned_tournaments(&self) -> Result<u64, sqlx::Error> {
+        let result: AnyQueryResult =
+            sqlx::query("UPDATE tournaments SET status = 'abandoned' WHERE status = 'running'")
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn finish_match(
         &self,
         match_id: i64,

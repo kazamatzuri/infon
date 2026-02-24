@@ -101,6 +101,18 @@ async fn main() {
         ensure_local_user(&db).await;
     }
 
+    // Clean up any matches/tournaments left in 'running' status from a prior server crash/restart
+    match db.cleanup_orphaned_matches().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("Marked {n} orphaned matches as abandoned"),
+        Err(e) => tracing::error!("Failed to clean up orphaned matches: {e}"),
+    }
+    match db.cleanup_orphaned_tournaments().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("Marked {n} orphaned tournaments as abandoned"),
+        Err(e) => tracing::error!("Failed to clean up orphaned tournaments: {e}"),
+    }
+
     let game_server = Arc::new(GameServer::new());
     let rate_limiter = RateLimiter::new();
     let game_queue = GameQueue::new();
