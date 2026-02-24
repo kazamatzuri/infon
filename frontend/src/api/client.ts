@@ -157,6 +157,8 @@ export interface MatchDetail {
     creatures_spawned: number;
     creatures_killed: number;
     creatures_lost: number;
+    bot_name: string | null;
+    owner_name: string | null;
   }[];
 }
 

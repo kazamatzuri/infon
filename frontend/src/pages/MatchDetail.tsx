@@ -124,7 +124,12 @@ export function MatchDetail() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                 <span style={{ color: '#e0e0e0', fontWeight: 600 }}>
-                  Slot {p.player_slot + 1} (Bot Version #{p.bot_version_id})
+                  {p.bot_name ?? `Bot Version #${p.bot_version_id}`}
+                  {p.owner_name && (
+                    <span style={{ color: '#888', fontWeight: 400, marginLeft: '8px', fontSize: '13px' }}>
+                      by {p.owner_name}
+                    </span>
+                  )}
                   {p.bot_version_id === m.winner_bot_version_id && (
                     <span style={{ color: '#16c79a', marginLeft: '8px' }}>Winner</span>
                   )}

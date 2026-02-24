@@ -21,7 +21,9 @@ function formatDuration(seconds: number): string {
 
 function timeAgo(dateStr: string): string {
   const now = Date.now();
-  const then = new Date(dateStr).getTime();
+  // Backend stores UTC timestamps without timezone suffix; append 'Z' so JS parses as UTC
+  const utcStr = dateStr.endsWith('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z';
+  const then = new Date(utcStr).getTime();
   const diffSec = Math.floor((now - then) / 1000);
   if (diffSec < 60) return 'just now';
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;

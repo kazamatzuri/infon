@@ -106,6 +106,8 @@ pub struct MatchParticipant {
     pub creatures_spawned: i32,
     pub creatures_killed: i32,
     pub creatures_lost: i32,
+    pub bot_name: Option<String>,
+    pub owner_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -1150,7 +1152,7 @@ impl Database {
         player_slot: i32,
     ) -> Result<MatchParticipant, sqlx::Error> {
         let row = sqlx::query_as::<_, MatchParticipant>(
-            "INSERT INTO match_participants (match_id, bot_version_id, player_slot) VALUES ($1, $2, $3) RETURNING id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost",
+            "INSERT INTO match_participants (match_id, bot_version_id, player_slot) VALUES ($1, $2, $3) RETURNING id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost, NULL AS bot_name, NULL AS owner_name",
         )
         .bind(match_id)
         .bind(bot_version_id)
@@ -1192,7 +1194,7 @@ impl Database {
         match_id: i64,
     ) -> Result<Vec<MatchParticipant>, sqlx::Error> {
         let rows = sqlx::query_as::<_, MatchParticipant>(
-            "SELECT id, match_id, bot_version_id, player_slot, final_score, placement, elo_before, elo_after, creatures_spawned, creatures_killed, creatures_lost FROM match_participants WHERE match_id = $1 ORDER BY player_slot",
+            "SELECT mp.id, mp.match_id, mp.bot_version_id, mp.player_slot, mp.final_score, mp.placement, mp.elo_before, mp.elo_after, mp.creatures_spawned, mp.creatures_killed, mp.creatures_lost, b.name AS bot_name, u.username AS owner_name FROM match_participants mp LEFT JOIN bot_versions bv ON bv.id = mp.bot_version_id LEFT JOIN bots b ON b.id = bv.bot_id LEFT JOIN users u ON u.id = b.owner_id WHERE mp.match_id = $1 ORDER BY mp.player_slot",
         )
         .bind(match_id)
         .fetch_all(&self.pool)

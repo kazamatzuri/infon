@@ -1105,10 +1105,15 @@ async fn start_game(
             Err(e) => return internal_error(e).into_response(),
         };
 
-        let name = p
-            .name
-            .clone()
-            .unwrap_or_else(|| format!("Player {}", i + 1));
+        let name = if let Some(n) = p.name.clone() {
+            n
+        } else {
+            // Look up the bot name from the DB
+            match state.db.get_bot(version.bot_id).await {
+                Ok(Some(b)) => b.name,
+                _ => format!("Player {}", i + 1),
+            }
+        };
 
         bot_version_ids.push(p.bot_version_id);
         players.push(PlayerEntry {
@@ -1273,6 +1278,16 @@ async fn create_challenge(
         Err(e) => return internal_error(e).into_response(),
     };
 
+    // Look up bot names for player display
+    let bot_a_name = match state.db.get_bot(version_a.bot_id).await {
+        Ok(Some(b)) => b.name,
+        _ => format!("Bot v{}", version_a.version),
+    };
+    let bot_b_name = match state.db.get_bot(version_b.bot_id).await {
+        Ok(Some(b)) => b.name,
+        _ => format!("Bot v{}", version_b.version),
+    };
+
     // Check rate limits
     let limit_type = if headless {
         RateLimitType::HeadlessChallenges
@@ -1322,11 +1337,11 @@ async fn create_challenge(
             players: vec![
                 crate::queue::QueuePlayer {
                     bot_version_id: req.bot_version_id,
-                    name: format!("Player 1 (v{})", version_a.version),
+                    name: bot_a_name.clone(),
                 },
                 crate::queue::QueuePlayer {
                     bot_version_id: req.opponent_bot_version_id,
-                    name: format!("Player 2 (v{})", version_b.version),
+                    name: bot_b_name.clone(),
                 },
             ],
             map: req.map.clone(),
@@ -1352,11 +1367,11 @@ async fn create_challenge(
             players: vec![
                 crate::queue::QueuePlayer {
                     bot_version_id: req.bot_version_id,
-                    name: format!("Player 1 (v{})", version_a.version),
+                    name: bot_a_name.clone(),
                 },
                 crate::queue::QueuePlayer {
                     bot_version_id: req.opponent_bot_version_id,
-                    name: format!("Player 2 (v{})", version_b.version),
+                    name: bot_b_name.clone(),
                 },
             ],
             map: req.map.clone(),
@@ -1384,23 +1399,13 @@ async fn create_challenge(
         }
     };
 
-    // Get bot names from the DB
-    let name_a = match state.db.get_bot(version_a.bot_id).await {
-        Ok(Some(b)) => format!("{} v{}", b.name, version_a.version),
-        _ => format!("Player 1 (v{})", version_a.version),
-    };
-    let name_b = match state.db.get_bot(version_b.bot_id).await {
-        Ok(Some(b)) => format!("{} v{}", b.name, version_b.version),
-        _ => format!("Player 2 (v{})", version_b.version),
-    };
-
     let players = vec![
         PlayerEntry {
-            name: name_a,
+            name: bot_a_name.clone(),
             code: version_a.code,
         },
         PlayerEntry {
-            name: name_b,
+            name: bot_b_name.clone(),
             code: version_b.code,
         },
     ];
