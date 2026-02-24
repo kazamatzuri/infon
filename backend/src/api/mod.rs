@@ -971,14 +971,23 @@ async fn run_tournament(
 
 async fn list_maps(State(state): State<AppState>) -> impl IntoResponse {
     let mut maps = server::list_maps(&state.maps_dir);
-    // Prepend a "Random" pseudo-entry
+    // Prepend pseudo-entries for random options
+    maps.insert(
+        0,
+        server::MapInfo {
+            name: "random_pool".to_string(),
+            width: 0,
+            height: 0,
+            description: "Random from pool".to_string(),
+        },
+    );
     maps.insert(
         0,
         server::MapInfo {
             name: "random".to_string(),
-            width: 30,
-            height: 30,
-            description: "Randomly generated map".to_string(),
+            width: 0,
+            height: 0,
+            description: "Random generated".to_string(),
         },
     );
     (StatusCode::OK, Json(json!(maps))).into_response()
@@ -987,8 +996,20 @@ async fn list_maps(State(state): State<AppState>) -> impl IntoResponse {
 /// Resolve an optional map name to a World.
 pub fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World, String> {
     use crate::engine::world::RandomMapParams;
+    use rand::seq::SliceRandom;
     match map.as_deref() {
         None | Some("random") | Some("default") => Ok(World::generate_random(RandomMapParams::default())),
+        Some("random_pool") => {
+            let available = server::list_maps(maps_dir);
+            if available.is_empty() {
+                // Fall back to generated if no map files exist
+                Ok(World::generate_random(RandomMapParams::default()))
+            } else {
+                let mut rng = rand::thread_rng();
+                let chosen = available.choose(&mut rng).unwrap();
+                server::load_map(maps_dir, &chosen.name)
+            }
+        }
         Some(name) => server::load_map(maps_dir, name),
     }
 }

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import type { Tournament, TournamentEntry, TournamentResult, TournamentStanding, TournamentRound, Bot, BotVersion } from '../api/client';
+import type { Tournament, TournamentEntry, TournamentResult, TournamentStanding, TournamentRound, Bot, BotVersion, MapInfo } from '../api/client';
 import { TournamentBracket } from '../components/tournament/TournamentBracket';
 
 const FORMAT_OPTIONS = [
@@ -11,6 +11,15 @@ const FORMAT_OPTIONS = [
   { value: 'swiss_3', label: 'Swiss (3 rounds)' },
   { value: 'swiss_5', label: 'Swiss (5 rounds)' },
 ];
+
+const MAP_LABELS: Record<string, string> = {
+  random: 'Random Generated',
+  random_pool: 'Random from Pool',
+};
+
+function mapLabel(map: string): string {
+  return MAP_LABELS[map] || map.charAt(0).toUpperCase() + map.slice(1);
+}
 
 function formatLabel(format: string): string {
   const found = FORMAT_OPTIONS.find(f => f.value === format);
@@ -39,6 +48,8 @@ export function TournamentDetail() {
   const [selectedVersionId, setSelectedVersionId] = useState<number | ''>('');
   const [slotName, setSlotName] = useState('');
   const [selectedFormat, setSelectedFormat] = useState('round_robin');
+  const [maps, setMaps] = useState<MapInfo[]>([]);
+  const [selectedMap, setSelectedMap] = useState('random');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -56,6 +67,15 @@ export function TournamentDetail() {
       setTournament(t);
       setEntries(e);
       setSelectedFormat(t.format || 'round_robin');
+      setSelectedMap(t.map || 'random');
+
+      // Load maps list and bots list (non-critical)
+      try {
+        const m = await api.listMaps();
+        setMaps(m);
+      } catch {
+        // Non-critical
+      }
 
       // Only load bots list when logged in (needed for "Add Entry" form)
       if (user) {
@@ -142,6 +162,17 @@ export function TournamentDetail() {
     }
   };
 
+  const handleMapChange = async (map: string) => {
+    setSelectedMap(map);
+    try {
+      setError(null);
+      const updated = await api.updateTournament(tournamentId, { map });
+      setTournament(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update map');
+    }
+  };
+
   const handleRun = async () => {
     try {
       setError(null);
@@ -178,6 +209,9 @@ export function TournamentDetail() {
             <span style={{ color: '#888', fontSize: '12px' }}>
               {formatLabel(tournament.format)}
             </span>
+            <span style={{ color: '#888', fontSize: '12px' }}>
+              {mapLabel(tournament.map)}
+            </span>
           </div>
         </div>
         {user && (tournament.status === 'pending' || tournament.status === 'created') && entries.length >= 2 && (
@@ -212,6 +246,31 @@ export function TournamentDetail() {
                 }}
               >
                 {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Map selector - only when tournament is editable */}
+      {(tournament.status === 'pending' || tournament.status === 'created') && (
+        <div style={{ padding: '16px', background: '#16213e', borderRadius: '8px', marginBottom: '24px' }}>
+          <h4 style={{ color: '#aaa', margin: '0 0 12px 0', fontSize: '13px', textTransform: 'uppercase' }}>
+            Map
+          </h4>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {maps.map(m => (
+              <button
+                key={m.name}
+                onClick={() => handleMapChange(m.name)}
+                style={{
+                  ...btnFormat,
+                  background: selectedMap === m.name ? '#16c79a' : '#0a0a1a',
+                  color: selectedMap === m.name ? '#fff' : '#aaa',
+                  borderColor: selectedMap === m.name ? '#16c79a' : '#333',
+                }}
+              >
+                {mapLabel(m.name)}
               </button>
             ))}
           </div>
