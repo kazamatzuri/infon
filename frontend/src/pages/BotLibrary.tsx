@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { Bot } from '../api/client';
+import type { Bot, BotVersion } from '../api/client';
 
 type SortKey = 'name' | 'updated_at' | 'version_count' | 'latest_version' | 'latest_elo_1v1';
 type SortDir = 'asc' | 'desc';
@@ -15,6 +15,12 @@ export function BotLibrary() {
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
   const navigate = useNavigate();
+
+  // Stats modal state
+  const [statsBot, setStatsBot] = useState<Bot | null>(null);
+  const [statsVersions, setStatsVersions] = useState<BotVersion[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const loadBots = async () => {
     try {
@@ -64,6 +70,32 @@ export function BotLibrary() {
       setSortDir(key === 'name' ? 'asc' : 'desc');
     }
   };
+
+  const openStatsModal = async (bot: Bot) => {
+    setStatsBot(bot);
+    setStatsLoading(true);
+    setStatsVersions([]);
+    setSelectedVersionId(null);
+    try {
+      const versions = await api.listVersions(bot.id);
+      setStatsVersions(versions);
+      if (versions.length > 0) {
+        setSelectedVersionId(versions[versions.length - 1].id);
+      }
+    } catch {
+      // leave empty
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  const closeStatsModal = () => {
+    setStatsBot(null);
+    setStatsVersions([]);
+    setSelectedVersionId(null);
+  };
+
+  const selectedVersion = statsVersions.find(v => v.id === selectedVersionId) ?? null;
 
   const sortedBots = useMemo(() => {
     const filtered = search
@@ -159,7 +191,7 @@ export function BotLibrary() {
               <tr key={bot.id} style={{ borderBottom: '1px solid #222' }}>
                 <td style={tdStyle}>
                   <a
-                    onClick={() => navigate(`/editor/${bot.id}`)}
+                    onClick={() => openStatsModal(bot)}
                     style={{ color: '#16c79a', cursor: 'pointer', textDecoration: 'none' }}
                   >
                     {bot.name}
@@ -181,29 +213,149 @@ export function BotLibrary() {
                   {new Date(bot.updated_at).toLocaleDateString()}
                 </td>
                 <td style={tdStyle}>
-                  {confirmingDelete === bot.id ? (
-                    <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <button onClick={() => handleDelete(bot.id)} style={btnDangerConfirm}>
-                        Confirm
-                      </button>
-                      <button onClick={() => setConfirmingDelete(null)} style={btnCancel}>
-                        Cancel
-                      </button>
-                    </span>
-                  ) : (
-                    <button onClick={() => handleDelete(bot.id)} style={btnDanger}>
-                      Delete
+                  <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button onClick={() => navigate(`/editor/${bot.id}`)} style={btnEdit}>
+                      Edit
                     </button>
-                  )}
+                    {confirmingDelete === bot.id ? (
+                      <>
+                        <button onClick={() => handleDelete(bot.id)} style={btnDangerConfirm}>
+                          Confirm
+                        </button>
+                        <button onClick={() => setConfirmingDelete(null)} style={btnCancel}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button onClick={() => handleDelete(bot.id)} style={btnDanger}>
+                        Delete
+                      </button>
+                    )}
+                  </span>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+
+      {/* Stats Modal */}
+      {statsBot && (
+        <div
+          style={overlayStyle}
+          onClick={e => { if (e.target === e.currentTarget) closeStatsModal(); }}
+        >
+          <div style={modalStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, color: '#e0e0e0' }}>{statsBot.name}</h3>
+              <button onClick={closeStatsModal} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+
+            {statsBot.description && (
+              <p style={{ color: '#888', fontSize: '13px', marginBottom: '16px' }}>{statsBot.description}</p>
+            )}
+
+            {statsLoading ? (
+              <p style={{ color: '#888' }}>Loading stats...</p>
+            ) : statsVersions.length === 0 ? (
+              <p style={{ color: '#888' }}>No versions yet.</p>
+            ) : (
+              <>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ color: '#aaa', fontSize: '13px', display: 'block', marginBottom: '4px' }}>Version</label>
+                  <select
+                    value={selectedVersionId ?? ''}
+                    onChange={e => setSelectedVersionId(Number(e.target.value) || null)}
+                    style={selectStyle}
+                  >
+                    {statsVersions.map(v => (
+                      <option key={v.id} value={v.id}>
+                        v{v.version} (ID: {v.id}){v.id === statsVersions[statsVersions.length - 1].id ? ' — latest' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedVersion && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <StatBox label="Elo (1v1)" value={selectedVersion.elo_1v1} />
+                    <StatBox label="Elo (Peak)" value={selectedVersion.elo_peak} />
+                    <StatBox label="Games Played" value={selectedVersion.games_played} />
+                    <StatBox
+                      label="Win Rate"
+                      value={selectedVersion.games_played > 0
+                        ? `${(selectedVersion.wins / selectedVersion.games_played * 100).toFixed(1)}%`
+                        : '-'}
+                    />
+                    <StatBox label="Wins" value={selectedVersion.wins} color="#4caf50" />
+                    <StatBox label="Losses" value={selectedVersion.losses} color="#e94560" />
+                    <StatBox label="Draws" value={selectedVersion.draws} color="#888" />
+                    <StatBox label="Total Score" value={selectedVersion.total_score} />
+                    <StatBox label="Creatures Spawned" value={selectedVersion.creatures_spawned} />
+                    <StatBox label="Creatures Killed" value={selectedVersion.creatures_killed} color="#4caf50" />
+                    <StatBox label="Creatures Lost" value={selectedVersion.creatures_lost} color="#e94560" />
+                    <StatBox
+                      label="FFA Avg Placement"
+                      value={selectedVersion.ffa_games > 0
+                        ? (selectedVersion.ffa_placement_points / selectedVersion.ffa_games).toFixed(1)
+                        : '-'}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+function StatBox({ label, value, color }: { label: string; value: string | number; color?: string }) {
+  return (
+    <div style={{ background: '#0f0f23', borderRadius: '6px', padding: '10px 12px' }}>
+      <div style={{ color: '#888', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+        {label}
+      </div>
+      <div style={{ color: color ?? '#e0e0e0', fontSize: '18px', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+const overlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,0.7)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+};
+
+const modalStyle: React.CSSProperties = {
+  background: '#1a1a2e',
+  borderRadius: '12px',
+  padding: '24px',
+  minWidth: '420px',
+  maxWidth: '520px',
+  maxHeight: '80vh',
+  overflowY: 'auto',
+  border: '1px solid #333',
+};
+
+const selectStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '8px',
+  background: '#0f0f23',
+  color: '#e0e0e0',
+  border: '1px solid #333',
+  borderRadius: '4px',
+  fontSize: '14px',
+};
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',
@@ -246,6 +398,16 @@ const btnPrimary: React.CSSProperties = {
   cursor: 'pointer',
   fontWeight: 600,
   fontSize: '14px',
+};
+
+const btnEdit: React.CSSProperties = {
+  background: 'transparent',
+  color: '#16c79a',
+  border: '1px solid #16c79a',
+  padding: '4px 12px',
+  borderRadius: '4px',
+  cursor: 'pointer',
+  fontSize: '13px',
 };
 
 const btnDanger: React.CSSProperties = {

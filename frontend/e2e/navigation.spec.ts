@@ -16,7 +16,6 @@ test.describe('Navigation & Layout', () => {
 
     // Auth-only nav links NOT visible
     await expect(nav.getByRole('link', { name: 'Bot Library' })).not.toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Editor' })).not.toBeVisible();
   });
 
   test('unauthenticated user sees Login/Register links', async ({ page }) => {

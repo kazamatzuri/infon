@@ -31,7 +31,6 @@ function NavBar() {
       {user ? (
         <>
           <NavLink to="/bots" className={navLinkClass}>Bot Library</NavLink>
-          <NavLink to="/editor" className={navLinkClass}>Editor</NavLink>
           <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
           <NavLink to="/tournaments" className={navLinkClass}>Tournaments</NavLink>
           <NavLink to="/games" className={navLinkClass}>Games</NavLink>

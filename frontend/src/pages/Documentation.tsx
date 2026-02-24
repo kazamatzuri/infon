@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-type Section = 'getting-started' | 'lua-api' | 'strategy' | 'faq';
+type Section = 'getting-started' | 'lua-api' | 'rest-api' | 'strategy' | 'faq';
 
 const sectionLabels: Record<Section, string> = {
   'getting-started': 'Getting Started',
   'lua-api': 'Lua API Reference',
+  'rest-api': 'REST API & Auth',
   'strategy': 'Strategy Guide',
   'faq': 'FAQ / Troubleshooting',
 };
@@ -91,6 +92,7 @@ export function Documentation() {
           {activeSection === 'lua-api' && (
             <LuaApiReference content={luaApiResult?.content ?? ''} loading={luaApiResult === null} error={luaApiResult?.error ?? null} />
           )}
+          {activeSection === 'rest-api' && <RestApiDocs />}
           {activeSection === 'strategy' && <StrategyGuide />}
           {activeSection === 'faq' && <FAQ />}
         </div>
@@ -485,6 +487,200 @@ function MarkdownTable({ lines }: { lines: string[] }) {
     </div>
   );
 }
+
+/* ── REST API & Authentication ──────────────────────────────────────── */
+
+function RestApiDocs() {
+  return (
+    <>
+      <SectionTitle>REST API & Authentication</SectionTitle>
+
+      <Card title="Authentication Methods">
+        <p style={textStyle}>
+          The Infon API supports two authentication methods. Both use the same{' '}
+          <code style={{ color: '#16c79a' }}>Authorization</code> header format:
+        </p>
+        <CodeBlock>{'Authorization: Bearer <token>'}</CodeBlock>
+
+        <h4 style={{ color: '#f5a623', marginTop: 20, marginBottom: 8, fontSize: 14 }}>
+          1. JWT Token (Session-Based)
+        </h4>
+        <p style={textStyle}>
+          Obtained by logging in. Used automatically by the web UI. Tokens expire after a period of inactivity.
+        </p>
+        <CodeBlock>{`# Login to get a JWT token
+curl -X POST /api/auth/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"username": "your_user", "password": "your_pass"}'
+
+# Response: {"token": "eyJ...", "user": {...}}
+
+# Use the token in subsequent requests
+curl /api/bots \\
+  -H "Authorization: Bearer eyJ..."`}</CodeBlock>
+
+        <h4 style={{ color: '#f5a623', marginTop: 20, marginBottom: 8, fontSize: 14 }}>
+          2. API Keys (Programmatic Access)
+        </h4>
+        <p style={textStyle}>
+          API keys are long-lived tokens for scripts, CI pipelines, or external tools.
+          Create them from the <strong style={{ color: '#e0e0e0' }}>API Keys</strong> page in the web UI,
+          or via the API. Unlike JWT tokens, API keys do not expire (but can be revoked).
+        </p>
+        <CodeBlock>{`# Create an API key (requires JWT auth)
+curl -X POST /api/api-keys \\
+  -H "Authorization: Bearer <jwt-token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "My Script", "scopes": "bots:read,bots:write,matches:read,matches:write"}'
+
+# Response includes the key (shown only once!):
+# {"id": 1, "name": "My Script", "token": "infon_a1b2c3...", ...}
+
+# Use the API key exactly like a JWT token:
+curl /api/bots \\
+  -H "Authorization: Bearer infon_a1b2c3..."`}</CodeBlock>
+      </Card>
+
+      <Card title="API Key Scopes">
+        <p style={textStyle}>
+          Scopes control what an API key can access. Specify them as a comma-separated string when
+          creating the key. Available scopes:
+        </p>
+        <div style={{ overflowX: 'auto', margin: '12px 0' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={apiThStyle}>Scope</th>
+                <th style={apiThStyle}>Allows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['bots:read', 'List and view bots and versions'],
+                ['bots:write', 'Create/update/delete bots and versions'],
+                ['matches:read', 'View matches, replays, and leaderboards'],
+                ['matches:write', 'Create challenges and start games'],
+                ['teams:write', 'Create/manage teams'],
+                ['api_keys:write', 'Create new API keys'],
+                ['leaderboard:read', 'View leaderboard rankings'],
+              ].map(([scope, desc]) => (
+                <tr key={scope}>
+                  <td style={apiTdStyle}><code style={{ color: '#16c79a' }}>{scope}</code></td>
+                  <td style={apiTdStyle}>{desc}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ ...textStyle, fontSize: 13 }}>
+          Default scopes (if not specified): <code style={{ color: '#16c79a' }}>bots:read,matches:read,leaderboard:read</code>
+        </p>
+      </Card>
+
+      <Card title="Key Endpoints">
+        <h4 style={{ color: '#f5a623', marginTop: 0, marginBottom: 8, fontSize: 14 }}>
+          Authentication
+        </h4>
+        <CodeBlock>{`POST /api/auth/register  - Create account
+POST /api/auth/login     - Get JWT token
+GET  /api/auth/me        - Current user info`}</CodeBlock>
+
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Bots & Versions
+        </h4>
+        <CodeBlock>{`GET/POST /api/bots                    - List/create bots
+GET/PUT/DELETE /api/bots/{id}         - Get/update/delete bot
+GET/POST /api/bots/{id}/versions      - List/create versions
+PUT /api/bots/{id}/active-version     - Set active version
+GET /api/bots/{id}/stats              - Version stats`}</CodeBlock>
+
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Matches & Challenges
+        </h4>
+        <CodeBlock>{`GET  /api/matches              - Recent matches
+GET  /api/matches/mine         - Your match history (auth required)
+GET  /api/matches/{id}         - Match details + participants
+GET  /api/matches/{id}/replay  - Match replay data
+POST /api/matches/challenge    - Create a challenge`}</CodeBlock>
+
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Games, Tournaments & Leaderboards
+        </h4>
+        <CodeBlock>{`POST /api/game/start           - Start a live game
+GET  /api/game/status          - Check if game is running
+POST /api/game/stop            - Stop current game
+GET  /api/games/active         - List active games
+GET  /api/queue/status         - Match queue status
+GET/POST /api/tournaments      - List/create tournaments
+POST /api/tournaments/{id}/run - Run tournament
+GET  /api/leaderboards/1v1     - 1v1 rankings
+GET  /api/leaderboards/ffa     - FFA rankings
+GET  /api/leaderboards/2v2     - 2v2 rankings`}</CodeBlock>
+
+        <h4 style={{ color: '#f5a623', marginTop: 16, marginBottom: 8, fontSize: 14 }}>
+          Other
+        </h4>
+        <CodeBlock>{`GET/POST /api/api-keys          - List/create API keys
+DELETE   /api/api-keys/{id}     - Revoke an API key
+GET/POST /api/teams             - List/create teams
+GET      /api/notifications     - Your notifications
+POST     /api/validate-lua      - Validate Lua code
+GET      /api/maps              - Available maps
+POST     /api/feedback          - Submit feedback
+GET      /api/docs/lua-api      - Lua API reference (Markdown)
+WS       /ws/game               - Live game WebSocket`}</CodeBlock>
+      </Card>
+
+      <Card title="Example: Automated Challenge via API Key">
+        <p style={textStyle}>
+          Here is a complete example using curl to create an API key and run a headless challenge:
+        </p>
+        <CodeBlock>{`# Step 1: Login to get a JWT
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"username": "player1", "password": "secret"}' | jq -r '.token')
+
+# Step 2: Create an API key with match permissions
+API_KEY=$(curl -s -X POST http://localhost:3000/api/api-keys \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "challenge-bot", "scopes": "matches:write,matches:read,bots:read"}' \\
+  | jq -r '.token')
+
+# Step 3: Use the API key to create a headless challenge
+curl -X POST http://localhost:3000/api/matches/challenge \\
+  -H "Authorization: Bearer $API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "bot_version_id": 1,
+    "opponent_bot_version_id": 2,
+    "format": "1v1",
+    "headless": true
+  }'
+
+# Step 4: Check your match history
+curl http://localhost:3000/api/matches/mine \\
+  -H "Authorization: Bearer $API_KEY"`}</CodeBlock>
+      </Card>
+    </>
+  );
+}
+
+const apiThStyle: React.CSSProperties = {
+  textAlign: 'left',
+  padding: '8px 12px',
+  borderBottom: '2px solid #333',
+  color: '#f5a623',
+  fontWeight: 600,
+  fontSize: 13,
+};
+
+const apiTdStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  borderBottom: '1px solid #1a3a5c',
+  color: '#ccc',
+  fontSize: 13,
+};
 
 /* ── Strategy Guide ─────────────────────────────────────────────────── */
 

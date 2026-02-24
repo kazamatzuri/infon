@@ -7,7 +7,8 @@ pub const LLMS_TXT: &str = r#"# Infon Battle Arena API
 /api/
 
 ## Authentication
-Bearer token (JWT from /api/auth/login or API key from /api/api-keys)
+Bearer token via Authorization header. Supports both JWT tokens (from /api/auth/login) and API keys (from /api/api-keys).
+API keys use the same header format: `Authorization: Bearer infon_...`
 
 ## Key Endpoints
 - POST /api/auth/register - Create account
@@ -18,7 +19,16 @@ Bearer token (JWT from /api/auth/login or API key from /api/api-keys)
 - GET/POST /api/bots/{id}/versions - List/create bot versions
 - PUT /api/bots/{id}/active-version - Set active version
 - GET /api/bots/{id}/stats - Get bot version stats
+- GET /api/matches - List recent matches
+- GET /api/matches/mine - User's own match history (auth required)
 - GET /api/matches/{id} - Get match details
+- GET /api/matches/{id}/replay - Get match replay data
+- POST /api/matches/challenge - Create a challenge match
+- POST /api/game/start - Start a live game
+- GET /api/game/status - Check game status
+- POST /api/game/stop - Stop current game
+- GET /api/games/active - List active games
+- GET /api/queue/status - Match queue status
 - GET/POST /api/tournaments - List/create tournaments
 - POST /api/tournaments/{id}/run - Run a tournament
 - GET /api/leaderboards/1v1 - View 1v1 rankings
@@ -27,11 +37,17 @@ Bearer token (JWT from /api/auth/login or API key from /api/api-keys)
 - GET/POST /api/teams - List/create teams
 - GET/POST /api/api-keys - List/create API keys
 - DELETE /api/api-keys/{id} - Revoke API key
+- GET /api/notifications - User notifications (auth required)
+- POST /api/notifications/{id}/read - Mark notification read
+- POST /api/validate-lua - Validate Lua syntax
 - GET /api/docs/lua-api - Lua API reference (Markdown)
 - GET /api/maps - List available maps
-- POST /api/game/start - Start a game
-- GET /api/game/status - Check game status
 - POST /api/feedback - Submit feedback
+
+## API Key Authentication
+Create an API key via POST /api/api-keys with scopes like "bots:read,matches:write".
+Use it as: `Authorization: Bearer infon_<key>`
+Available scopes: bots:read, bots:write, matches:read, matches:write, teams:write, api_keys:write, leaderboard:read
 
 ## Bot Programming
 Bots are written in Lua 5.1. The low-level API exposes C functions directly (set_path, get_pos, etc.).
@@ -74,6 +90,15 @@ and each tick every creature's Lua coroutine is resumed to make decisions.
 ### Authentication
 
 All authenticated endpoints require a Bearer token in the Authorization header.
+Two token types are supported:
+
+1. **JWT tokens** - obtained from login, used by the web UI, expire after inactivity
+2. **API keys** - long-lived tokens for scripts/CI, created via /api/api-keys, prefixed with `infon_`
+
+Both use the same header format:
+```
+Authorization: Bearer <token>
+```
 
 **Register:**
 ```
@@ -93,6 +118,43 @@ Response: {"token": "jwt...", "user": {...}}
 **Current User:**
 ```
 GET /api/auth/me
+Authorization: Bearer <token>
+```
+
+### API Keys
+
+API keys provide long-lived programmatic access. They do not expire but can be revoked.
+
+**Create API Key:**
+```
+POST /api/api-keys
+Authorization: Bearer <token>
+Content-Type: application/json
+{"name": "CI Key", "scopes": "bots:read,matches:read,matches:write"}
+Response: {"id": 1, "name": "CI Key", "token": "infon_a1b2c3...", ...}
+```
+The `token` field is only returned on creation. Store it securely.
+
+**Available Scopes:**
+- bots:read - List and view bots and versions
+- bots:write - Create/update/delete bots and versions
+- matches:read - View matches, replays, and leaderboards
+- matches:write - Create challenges and start games
+- teams:write - Create/manage teams
+- api_keys:write - Create new API keys
+- leaderboard:read - View leaderboard rankings
+
+Default scopes (if not specified): bots:read,matches:read,leaderboard:read
+
+**List API Keys:**
+```
+GET /api/api-keys
+Authorization: Bearer <token>
+```
+
+**Revoke API Key:**
+```
+DELETE /api/api-keys/{id}
 Authorization: Bearer <token>
 ```
 
@@ -154,6 +216,12 @@ Response: [{version_id, elo_1v1, games_played, wins, losses, ...}]
 GET /api/matches?limit=20
 ```
 
+**List Your Matches:**
+```
+GET /api/matches/mine?limit=50&offset=0
+Authorization: Bearer <token>
+```
+
 **Get Match Detail:**
 ```
 GET /api/matches/{id}
@@ -169,6 +237,7 @@ Response: {"match_id", "tick_count", "messages": [...]}
 **Create Challenge:**
 ```
 POST /api/matches/challenge
+Authorization: Bearer <token>
 Content-Type: application/json
 {
   "bot_version_id": 1,
@@ -184,6 +253,7 @@ Content-Type: application/json
 **Start Game:**
 ```
 POST /api/game/start
+Authorization: Bearer <token>
 Content-Type: application/json
 {
   "players": [{"bot_version_id": 1, "name": "Bot A"}, {"bot_version_id": 2}],
@@ -200,6 +270,18 @@ Response: {"running": true}
 **Stop Game:**
 ```
 POST /api/game/stop
+Authorization: Bearer <token>
+```
+
+**Active Games:**
+```
+GET /api/games/active
+Response: [{match_id, player_names, format, map, spectator_count, ...}]
+```
+
+**Queue Status:**
+```
+GET /api/queue/status
 ```
 
 ### Tournaments
@@ -260,12 +342,15 @@ GET /api/teams/{id}/versions
 POST /api/teams/{id}/versions  {"bot_version_a": 1, "bot_version_b": 2}
 ```
 
-### API Keys
+### Notifications
 
 ```
-GET /api/api-keys
-POST /api/api-keys  {"name": "CI Key", "scopes": "bots:read,matches:read"}
-DELETE /api/api-keys/{id}
+GET /api/notifications
+Authorization: Bearer <token>
+Response: {"notifications": [...], "unread_count": 3}
+
+POST /api/notifications/{id}/read
+Authorization: Bearer <token>
 ```
 
 ### Maps
@@ -279,6 +364,7 @@ Response: [{"name": "random", "width": 30, "height": 30, "description": "..."}]
 
 ```
 POST /api/validate-lua
+Authorization: Bearer <token>
 Content-Type: application/json
 {"code": "function Creature:main() end"}
 Response: {"valid": true} or {"valid": false, "error": "..."}
@@ -310,7 +396,8 @@ WS /ws/game  - Live game state stream
 Messages:
 - `world`: Map dimensions, tiles, KotH position
 - `snapshot`: Creature positions, player scores (sent each tick)
-- `game_end`: Final scores, winner, match ID
+- `snapshot_delta`: Incremental creature updates (changed/removed)
+- `game_end`: Final scores, winner, match ID, player stats
 - `player_load_error`: Lua loading errors
 
 ---
