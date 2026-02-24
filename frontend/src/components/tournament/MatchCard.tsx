@@ -13,9 +13,6 @@ export function MatchCard({ match }: MatchCardProps) {
 
   const isWinner = (bvid: number) => isFinished && match.winner_bot_version_id === bvid;
   const isDraw = isFinished && match.winner_bot_version_id === null;
-  // A participant likely failed to load if they lost with score 0
-  const isFaultyLoser = (p: typeof p1) =>
-    isFinished && p && p.final_score === 0 && match.winner_bot_version_id !== null && match.winner_bot_version_id !== p.bot_version_id;
 
   return (
     <div
@@ -39,7 +36,6 @@ export function MatchCard({ match }: MatchCardProps) {
             score={p1.final_score}
             highlight={isWinner(p1.bot_version_id)}
             dim={isFinished && !isWinner(p1.bot_version_id) && !isDraw}
-            faulty={isFaultyLoser(p1)}
           />
           <div style={{ borderTop: '1px solid #2a2a4a', margin: '4px 0' }} />
           <ParticipantRow
@@ -47,7 +43,6 @@ export function MatchCard({ match }: MatchCardProps) {
             score={p2.final_score}
             highlight={isWinner(p2.bot_version_id)}
             dim={isFinished && !isWinner(p2.bot_version_id) && !isDraw}
-            faulty={isFaultyLoser(p2)}
           />
         </>
       ) : (
@@ -62,7 +57,7 @@ export function MatchCard({ match }: MatchCardProps) {
   );
 }
 
-function ParticipantRow({ name, score, highlight, dim, faulty }: { name: string; score: number; highlight: boolean; dim: boolean; faulty?: boolean }) {
+function ParticipantRow({ name, score, highlight, dim }: { name: string; score: number; highlight: boolean; dim: boolean }) {
   return (
     <div style={{
       display: 'flex',
@@ -72,14 +67,14 @@ function ParticipantRow({ name, score, highlight, dim, faulty }: { name: string;
       opacity: dim ? 0.5 : 1,
     }}>
       <span style={{
-        color: faulty ? '#e94560' : highlight ? '#16c79a' : '#e0e0e0',
+        color: highlight ? '#16c79a' : '#e0e0e0',
         fontWeight: highlight ? 700 : 400,
         fontSize: '13px',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
       }}>
-        {highlight && '\u2713 '}{name}{faulty && ' (DQ)'}
+        {highlight && '\u2713 '}{name}
       </span>
       <span style={{ color: '#aaa', fontSize: '13px', fontWeight: 600, flexShrink: 0 }}>
         {score}
