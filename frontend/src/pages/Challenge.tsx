@@ -5,7 +5,11 @@ import type { Bot, BotVersion, MapInfo, ChallengeResult } from '../api/client';
 
 export function Challenge() {
   const [searchParams] = useSearchParams();
-  const prefilledOpponent = searchParams.get('opponent');
+  const opponentVersionIdParam = searchParams.get('opponent');
+  const opponentName = searchParams.get('name');
+  const opponentVer = searchParams.get('ver');
+  const opponentRating = searchParams.get('rating');
+  const opponentOwner = searchParams.get('owner');
 
   // My bots
   const [myBots, setMyBots] = useState<Bot[]>([]);
@@ -13,17 +17,15 @@ export function Challenge() {
   const [myVersions, setMyVersions] = useState<BotVersion[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
 
-  // Opponent
-  const [allBots, setAllBots] = useState<Bot[]>([]);
-  const [opponentBotId, setOpponentBotId] = useState<number | null>(null);
-  const [opponentVersions, setOpponentVersions] = useState<BotVersion[]>([]);
-  const [opponentVersionId, setOpponentVersionId] = useState<number | null>(prefilledOpponent ? Number(prefilledOpponent) : null);
+  // Opponent (locked when arriving from leaderboard)
+  const [opponentVersionId] = useState<number | null>(
+    opponentVersionIdParam ? Number(opponentVersionIdParam) : null
+  );
 
   // Options
-  const [format, setFormat] = useState<string>('1v1');
-  const [headless, setHeadless] = useState(false);
   const [maps, setMaps] = useState<MapInfo[]>([]);
   const [selectedMap, setSelectedMap] = useState<string>('');
+  const [headless, setHeadless] = useState(false);
 
   // State
   const [loading, setLoading] = useState(true);
@@ -40,7 +42,6 @@ export function Challenge() {
           api.listMaps(),
         ]);
         setMyBots(bots);
-        setAllBots(bots);
         setMaps(mapList);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load data');
@@ -61,30 +62,13 @@ export function Challenge() {
     api.listVersions(selectedBotId).then(setMyVersions).catch(() => setMyVersions([]));
   }, [selectedBotId]);
 
-  // Load opponent versions when opponent bot selected
-  useEffect(() => {
-    if (!opponentBotId) {
-      setOpponentVersions([]);
-      if (!prefilledOpponent) setOpponentVersionId(null);
-      return;
-    }
-    api.listVersions(opponentBotId).then(versions => {
-      setOpponentVersions(versions);
-      // If prefilled opponent version, keep it; otherwise select latest
-      if (prefilledOpponent && versions.some(v => v.id === Number(prefilledOpponent))) {
-        setOpponentVersionId(Number(prefilledOpponent));
-      }
-    }).catch(() => setOpponentVersions([]));
-  }, [opponentBotId, prefilledOpponent]);
-
-  // Auto-select first bot
+  // Auto-select first bot and latest version
   useEffect(() => {
     if (myBots.length > 0 && !selectedBotId) {
       setSelectedBotId(myBots[0].id);
     }
   }, [myBots, selectedBotId]);
 
-  // Auto-select latest version
   useEffect(() => {
     if (myVersions.length > 0 && !selectedVersionId) {
       setSelectedVersionId(myVersions[myVersions.length - 1].id);
@@ -101,7 +85,7 @@ export function Challenge() {
 
     try {
       const res = await api.createChallenge(selectedVersionId, opponentVersionId, {
-        format,
+        format: '1v1',
         headless,
         map: selectedMap || undefined,
       });
@@ -111,29 +95,28 @@ export function Challenge() {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedVersionId, opponentVersionId, format, headless, selectedMap]);
+  }, [selectedVersionId, opponentVersionId, headless, selectedMap]);
 
   if (loading) {
-    return (
-      <div style={{ padding: 24, textAlign: 'center', color: '#888' }}>Loading...</div>
-    );
+    return <div style={{ padding: 24, textAlign: 'center', color: '#888' }}>Loading...</div>;
   }
 
+  const selectedBot = myBots.find(b => b.id === selectedBotId);
+  const selectedVersion = myVersions.find(v => v.id === selectedVersionId);
+
+  const canSubmit = !submitting && selectedVersionId && opponentVersionId;
+
   return (
-    <div style={{ maxWidth: 640, margin: '40px auto', padding: 24 }}>
-      <h2 style={{ color: '#e0e0e0', marginBottom: 24 }}>Challenge</h2>
-      <p style={{ color: '#aaa', marginBottom: 24 }}>
-        Challenge another bot to a match.
+    <div style={{ maxWidth: 900, margin: '40px auto', padding: 24 }}>
+      <h2 style={{ color: '#e0e0e0', marginBottom: 8, textAlign: 'center' }}>1v1 Challenge</h2>
+      <p style={{ color: '#666', marginBottom: 32, textAlign: 'center', fontSize: 14 }}>
+        Choose your bot and fight!
       </p>
 
       {error && (
         <div style={{
-          padding: 12,
-          background: '#5c1a1a',
-          border: '1px solid #e94560',
-          borderRadius: 4,
-          marginBottom: 16,
-          color: '#ff8a8a',
+          padding: 12, background: '#5c1a1a', border: '1px solid #e94560',
+          borderRadius: 4, marginBottom: 16, color: '#ff8a8a',
         }}>
           {error}
         </div>
@@ -141,151 +124,167 @@ export function Challenge() {
 
       {result && (
         <div style={{
-          padding: 16,
-          background: '#1a3a1a',
-          border: '1px solid #2a5a2a',
-          borderRadius: 8,
-          marginBottom: 24,
+          padding: 16, background: '#1a3a1a', border: '1px solid #2a5a2a',
+          borderRadius: 8, marginBottom: 24, textAlign: 'center',
         }}>
           <p style={{ fontWeight: 'bold', color: '#4caf50', marginBottom: 8 }}>
             Challenge created!
           </p>
-          <p style={{ color: '#e0e0e0', fontSize: 14 }}>
-            Match ID: <strong>{result.match_id ?? result.id ?? 'N/A'}</strong>
+          <p style={{ color: '#aaa', fontSize: 13, marginBottom: 12 }}>
+            {result.status === 'queued' || result.status === 'pending'
+              ? 'Match is queued — replay will be available once it finishes.'
+              : `Status: ${result.status ?? 'pending'}`
+            }
           </p>
-          <p style={{ color: '#aaa', fontSize: 13 }}>
-            Status: {result.status ?? 'pending'}
-          </p>
-          {(result.status === 'queued' || result.status === 'pending') && (
-            <p style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
-              Match is queued — replay will be available once it finishes.
-            </p>
-          )}
           <Link
             to={`/matches/${result.match_id ?? result.id}`}
             style={{
-              display: 'inline-block',
-              marginTop: 12,
-              padding: '6px 16px',
-              background: '#16c79a',
-              color: '#fff',
-              borderRadius: 4,
-              textDecoration: 'none',
-              fontSize: 14,
-              fontWeight: 600,
+              display: 'inline-block', padding: '8px 24px', background: '#16c79a',
+              color: '#fff', borderRadius: 4, textDecoration: 'none',
+              fontSize: 14, fontWeight: 600,
             }}
           >
-            View Match Details
+            View Match
           </Link>
         </div>
       )}
 
+      {/* VS Layout */}
       <form onSubmit={handleSubmit}>
-        {/* My Bot */}
-        <fieldset style={fieldsetStyle}>
-          <legend style={legendStyle}>Your Bot</legend>
-          <div style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>Bot</label>
-            <select
-              value={selectedBotId ?? ''}
-              onChange={e => {
-                setSelectedBotId(Number(e.target.value) || null);
-                setSelectedVersionId(null);
-              }}
-              style={selectStyle}
-            >
-              <option value="">-- Select a bot --</option>
-              {myBots.map(b => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
+        <div style={{
+          display: 'flex', alignItems: 'stretch', gap: 0,
+          marginBottom: 24,
+        }}>
+          {/* Your Bot Card */}
+          <div style={cardStyle}>
+            <div style={cardHeaderStyle}>YOUR BOT</div>
+            <div style={{ padding: '16px 20px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ marginBottom: 12 }}>
+                <label style={labelStyle}>Bot</label>
+                <select
+                  value={selectedBotId ?? ''}
+                  onChange={e => {
+                    setSelectedBotId(Number(e.target.value) || null);
+                    setSelectedVersionId(null);
+                  }}
+                  style={selectStyle}
+                >
+                  <option value="">-- Select --</option>
+                  {myBots.map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>Version</label>
+                <select
+                  value={selectedVersionId ?? ''}
+                  onChange={e => setSelectedVersionId(Number(e.target.value) || null)}
+                  style={selectStyle}
+                  disabled={myVersions.length === 0}
+                >
+                  <option value="">-- Select --</option>
+                  {myVersions.map(v => (
+                    <option key={v.id} value={v.id}>
+                      v{v.version} (Elo: {v.elo_rating})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {/* Selected bot stats */}
+              <div style={{ flex: 1 }} />
+              {selectedBot && selectedVersion ? (
+                <div style={statsBoxStyle}>
+                  <div style={botNameStyle}>{selectedBot.name}</div>
+                  <div style={versionTagStyle}>v{selectedVersion.version}</div>
+                  <div style={statRowStyle}>
+                    <span style={{ color: '#888' }}>Elo</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: 600 }}>{selectedVersion.elo_rating}</span>
+                  </div>
+                  <div style={statRowStyle}>
+                    <span style={{ color: '#888' }}>Record</span>
+                    <span>
+                      <span style={{ color: '#4caf50' }}>{selectedVersion.wins}W</span>
+                      {' / '}
+                      <span style={{ color: '#e94560' }}>{selectedVersion.losses}L</span>
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ ...statsBoxStyle, color: '#555', textAlign: 'center', padding: 24 }}>
+                  Select a bot
+                </div>
+              )}
+            </div>
           </div>
-          <div>
-            <label style={labelStyle}>Version</label>
-            <select
-              value={selectedVersionId ?? ''}
-              onChange={e => setSelectedVersionId(Number(e.target.value) || null)}
-              style={selectStyle}
-              disabled={myVersions.length === 0}
-            >
-              <option value="">-- Select version --</option>
-              {myVersions.map(v => (
-                <option key={v.id} value={v.id}>
-                  v{v.version} (Elo: {v.elo_rating})
-                </option>
-              ))}
-            </select>
-          </div>
-        </fieldset>
 
-        {/* Opponent */}
-        <fieldset style={fieldsetStyle}>
-          <legend style={legendStyle}>Opponent</legend>
-          <div style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>Opponent Bot</label>
-            <select
-              value={opponentBotId ?? ''}
-              onChange={e => {
-                setOpponentBotId(Number(e.target.value) || null);
-                setOpponentVersionId(null);
-              }}
-              style={selectStyle}
-            >
-              <option value="">-- Select opponent bot --</option>
-              {allBots.map(b => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
+          {/* VS Divider */}
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', padding: '0 12px', flexShrink: 0,
+          }}>
+            <div style={{
+              width: 2, flex: 1, background:
+                'linear-gradient(to bottom, transparent, #e94560 40%, #e94560 60%, transparent)',
+            }} />
+            <div style={{
+              fontSize: 28, fontWeight: 900, letterSpacing: 2,
+              color: '#e94560', textShadow: '0 0 20px rgba(233,69,96,0.5)',
+              padding: '16px 0', lineHeight: 1,
+            }}>
+              VS
+            </div>
+            <div style={{
+              width: 2, flex: 1, background:
+                'linear-gradient(to bottom, transparent, #e94560 40%, #e94560 60%, transparent)',
+            }} />
           </div>
-          <div>
-            <label style={labelStyle}>Version</label>
-            <select
-              value={opponentVersionId ?? ''}
-              onChange={e => setOpponentVersionId(Number(e.target.value) || null)}
-              style={selectStyle}
-              disabled={opponentVersions.length === 0}
-            >
-              <option value="">
-                {prefilledOpponent && !opponentBotId
-                  ? `Version ID: ${prefilledOpponent} (select bot to browse)`
-                  : '-- Select version --'}
-              </option>
-              {opponentVersions.map(v => (
-                <option key={v.id} value={v.id}>
-                  v{v.version} (Elo: {v.elo_rating})
-                </option>
-              ))}
-            </select>
-          </div>
-          {prefilledOpponent && (
-            <p style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
-              Pre-selected opponent version ID: {prefilledOpponent}
-            </p>
-          )}
-        </fieldset>
 
-        {/* Options */}
-        <fieldset style={fieldsetStyle}>
-          <legend style={legendStyle}>Options</legend>
-          <div style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>Format</label>
-            <select
-              value={format}
-              onChange={e => setFormat(e.target.value)}
-              style={selectStyle}
-            >
-              <option value="1v1">1v1</option>
-              <option value="ffa">FFA (Free For All)</option>
-            </select>
+          {/* Opponent Card */}
+          <div style={cardStyle}>
+            <div style={{ ...cardHeaderStyle, background: '#3a1a1a', color: '#e94560' }}>OPPONENT</div>
+            <div style={{ padding: '16px 20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              {opponentName ? (
+                <div style={statsBoxStyle}>
+                  <div style={botNameStyle}>{opponentName}</div>
+                  <div style={versionTagStyle}>v{opponentVer}</div>
+                  <div style={statRowStyle}>
+                    <span style={{ color: '#888' }}>Elo</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: 600 }}>{opponentRating}</span>
+                  </div>
+                  {opponentOwner && (
+                    <div style={statRowStyle}>
+                      <span style={{ color: '#888' }}>Owner</span>
+                      <span style={{ color: '#aaa' }}>{opponentOwner}</span>
+                    </div>
+                  )}
+                </div>
+              ) : opponentVersionId ? (
+                <div style={{ ...statsBoxStyle, color: '#888', textAlign: 'center', padding: 24 }}>
+                  Bot version #{opponentVersionId}
+                </div>
+              ) : (
+                <div style={{ ...statsBoxStyle, color: '#555', textAlign: 'center', padding: 24 }}>
+                  No opponent selected
+                </div>
+              )}
+            </div>
           </div>
-          <div style={{ marginBottom: 12 }}>
+        </div>
+
+        {/* Options row */}
+        <div style={{
+          display: 'flex', gap: 16, marginBottom: 24, alignItems: 'flex-end',
+          justifyContent: 'center',
+        }}>
+          <div>
             <label style={labelStyle}>Map</label>
             <select
               value={selectedMap}
               onChange={e => setSelectedMap(e.target.value)}
-              style={selectStyle}
+              style={{ ...selectStyle, width: 200 }}
             >
-              <option value="">Default</option>
+              <option value="">Default (random)</option>
               {maps.map(m => (
                 <option key={m.name} value={m.name}>
                   {m.name} ({m.width}x{m.height})
@@ -293,60 +292,100 @@ export function Challenge() {
               ))}
             </select>
           </div>
-          <div>
-            <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input
-                type="checkbox"
-                checked={headless}
-                onChange={e => setHeadless(e.target.checked)}
-              />
-              Headless (faster, no live view)
-            </label>
-          </div>
-        </fieldset>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#aaa', fontSize: 13, paddingBottom: 2 }}>
+            <input
+              type="checkbox"
+              checked={headless}
+              onChange={e => setHeadless(e.target.checked)}
+            />
+            Headless
+          </label>
+        </div>
 
-        <button
-          type="submit"
-          disabled={submitting || !selectedVersionId || !opponentVersionId}
-          style={{
-            padding: '10px 32px',
-            background: submitting || !selectedVersionId || !opponentVersionId ? '#333' : '#16c79a',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 4,
-            fontSize: 15,
-            fontWeight: 600,
-            cursor: submitting || !selectedVersionId || !opponentVersionId ? 'not-allowed' : 'pointer',
-            marginTop: 8,
-          }}
-        >
-          {submitting ? 'Submitting...' : 'Send Challenge'}
-        </button>
+        {/* Submit */}
+        <div style={{ textAlign: 'center' }}>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            style={{
+              padding: '12px 48px',
+              background: canSubmit ? '#e94560' : '#333',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 16,
+              fontWeight: 700,
+              cursor: canSubmit ? 'pointer' : 'not-allowed',
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              transition: 'background 0.15s',
+            }}
+          >
+            {submitting ? 'Launching...' : 'Fight!'}
+          </button>
+        </div>
       </form>
     </div>
   );
 }
 
-const fieldsetStyle: React.CSSProperties = {
+const cardStyle: React.CSSProperties = {
+  flex: 1,
+  background: '#1a1a2e',
   border: '1px solid #333',
   borderRadius: 8,
-  padding: 16,
-  marginBottom: 20,
-  background: '#1a1a2e',
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 280,
 };
 
-const legendStyle: React.CSSProperties = {
+const cardHeaderStyle: React.CSSProperties = {
+  padding: '10px 20px',
+  background: '#0a2a3a',
   color: '#16c79a',
-  fontWeight: 600,
-  fontSize: 14,
-  padding: '0 8px',
+  fontWeight: 700,
+  fontSize: 12,
+  letterSpacing: 2,
+  textTransform: 'uppercase',
+  borderRadius: '8px 8px 0 0',
+  textAlign: 'center',
+};
+
+const statsBoxStyle: React.CSSProperties = {
+  background: '#0f0f23',
+  border: '1px solid #2a2a4a',
+  borderRadius: 6,
+  padding: '16px',
+};
+
+const botNameStyle: React.CSSProperties = {
+  color: '#16c79a',
+  fontWeight: 700,
+  fontSize: 18,
+  marginBottom: 4,
+};
+
+const versionTagStyle: React.CSSProperties = {
+  color: '#888',
+  fontSize: 12,
+  marginBottom: 12,
+};
+
+const statRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  fontSize: 13,
+  padding: '4px 0',
+  borderTop: '1px solid #1a1a2e',
 };
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
   color: '#aaa',
-  fontSize: 13,
+  fontSize: 12,
   marginBottom: 4,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
 };
 
 const selectStyle: React.CSSProperties = {

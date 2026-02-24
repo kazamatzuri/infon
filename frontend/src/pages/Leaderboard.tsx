@@ -125,7 +125,7 @@ export function Leaderboard() {
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
                     <button
-                      onClick={() => navigate(`/challenge?opponent=${e.bot_version_id}`)}
+                      onClick={() => navigate(`/challenge?opponent=${e.bot_version_id}&name=${encodeURIComponent(e.bot_name)}&ver=${e.version}&rating=${e.rating}&owner=${encodeURIComponent(e.owner_username)}`)}
                       style={challengeBtn}
                     >
                       Challenge
