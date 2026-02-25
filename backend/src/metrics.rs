@@ -27,6 +27,10 @@ lazy_static! {
     pub static ref LUA_VM_POOL_ACTIVE: IntGauge =
         IntGauge::new("infon_lua_vm_pool_active", "Lua VMs currently executing").unwrap();
 
+    /// Headless game worker threads currently active.
+    pub static ref HEADLESS_WORKERS_ACTIVE: IntGauge =
+        IntGauge::new("infon_headless_workers_active", "Headless game workers currently active").unwrap();
+
     // ── Counters ─────────────────────────────────────────────────────
 
     /// Total games started, by format (1v1, ffa, 2v2).
@@ -128,6 +132,7 @@ pub fn register_metrics() {
         Box::new(GAME_QUEUE_DEPTH.clone()),
         Box::new(CONNECTED_WEBSOCKETS.clone()),
         Box::new(LUA_VM_POOL_ACTIVE.clone()),
+        Box::new(HEADLESS_WORKERS_ACTIVE.clone()),
         Box::new(GAMES_STARTED_TOTAL.clone()),
         Box::new(GAMES_COMPLETED_TOTAL.clone()),
         Box::new(GAMES_ERRORED_TOTAL.clone()),

@@ -268,6 +268,31 @@ pub struct Feedback {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct QueueJob {
+    pub id: i64,
+    pub match_id: i64,
+    pub status: String,
+    pub worker_id: Option<String>,
+    pub map: Option<String>,
+    pub priority: i32,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub error_message: Option<String>,
+    pub claimed_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameQueueStatus {
+    pub pending: i64,
+    pub claimed: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub total: i64,
+}
+
 pub struct Database {
     pool: AnyPool,
     is_postgres: bool,
@@ -480,6 +505,52 @@ impl Database {
                 last_used_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (now()::text)
             )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS notifications (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                type TEXT NOT NULL DEFAULT 'info',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                data TEXT,
+                read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS feedback (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT REFERENCES users(id),
+                category TEXT NOT NULL DEFAULT 'general',
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS game_queue (
+                id BIGSERIAL PRIMARY KEY,
+                match_id BIGINT NOT NULL REFERENCES matches(id),
+                status TEXT NOT NULL DEFAULT 'pending',
+                worker_id TEXT,
+                map TEXT,
+                headless BOOLEAN NOT NULL DEFAULT TRUE,
+                priority INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                error_message TEXT,
+                claimed_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (now()::text)
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE INDEX IF NOT EXISTS idx_game_queue_pending
+            ON game_queue(status, priority DESC, created_at)
         "#).await?;
 
         Ok(())
@@ -727,6 +798,30 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+
+        // Game queue table
+        self.exec(r#"
+            CREATE TABLE IF NOT EXISTS game_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL REFERENCES matches(id),
+                status TEXT NOT NULL DEFAULT 'pending',
+                worker_id TEXT,
+                map TEXT,
+                headless INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                error_message TEXT,
+                claimed_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        "#).await?;
+
+        self.exec(r#"
+            CREATE INDEX IF NOT EXISTS idx_game_queue_pending
+            ON game_queue(status, priority DESC, created_at)
+        "#).await?;
 
         Ok(())
     }
@@ -2223,6 +2318,175 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    // ── Game Queue ───────────────────────────────────────────────────
+
+    /// Enqueue a game for processing by the worker pool.
+    pub async fn enqueue_game(
+        &self,
+        match_id: i64,
+        map: Option<&str>,
+        priority: i32,
+    ) -> Result<QueueJob, sqlx::Error> {
+        let row = sqlx::query_as::<_, QueueJob>(
+            r#"INSERT INTO game_queue (match_id, map, priority)
+               VALUES (?, ?, ?)
+               RETURNING id, match_id, status, worker_id, map, priority,
+                         attempts, max_attempts, error_message,
+                         claimed_at, completed_at, created_at"#,
+        )
+        .bind(match_id)
+        .bind(map)
+        .bind(priority)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Atomically claim the next pending job for a worker.
+    /// Uses advisory locking on PostgreSQL; on SQLite the single-writer
+    /// serialization provides equivalent safety.
+    pub async fn claim_queue_job(
+        &self,
+        worker_id: &str,
+    ) -> Result<Option<QueueJob>, sqlx::Error> {
+        let now = self.now_expr();
+        if self.is_postgres {
+            // Use FOR UPDATE SKIP LOCKED for safe concurrent claiming
+            let sql = format!(
+                r#"UPDATE game_queue SET status = 'claimed', worker_id = $1, claimed_at = {now}
+                   WHERE id = (
+                       SELECT id FROM game_queue
+                       WHERE status = 'pending'
+                       ORDER BY priority DESC, created_at ASC
+                       LIMIT 1
+                       FOR UPDATE SKIP LOCKED
+                   )
+                   RETURNING id, match_id, status, worker_id, map, priority,
+                             attempts, max_attempts, error_message,
+                             claimed_at, completed_at, created_at"#,
+            );
+            let row = sqlx::query_as::<_, QueueJob>(&sql)
+                .bind(worker_id)
+                .fetch_optional(&self.pool)
+                .await?;
+            Ok(row)
+        } else {
+            // SQLite: single writer, no SKIP LOCKED needed
+            let sql = format!(
+                r#"UPDATE game_queue SET status = 'claimed', worker_id = ?, claimed_at = {now}
+                   WHERE id = (
+                       SELECT id FROM game_queue
+                       WHERE status = 'pending'
+                       ORDER BY priority DESC, created_at ASC
+                       LIMIT 1
+                   )
+                   RETURNING id, match_id, status, worker_id, map, priority,
+                             attempts, max_attempts, error_message,
+                             claimed_at, completed_at, created_at"#,
+            );
+            let row = sqlx::query_as::<_, QueueJob>(&sql)
+                .bind(worker_id)
+                .fetch_optional(&self.pool)
+                .await?;
+            Ok(row)
+        }
+    }
+
+    /// Mark a queue job as completed.
+    pub async fn complete_queue_job(&self, job_id: i64) -> Result<(), sqlx::Error> {
+        let now = self.now_expr();
+        let sql = format!(
+            "UPDATE game_queue SET status = 'completed', completed_at = {now} WHERE id = ?"
+        );
+        sqlx::query(&sql).bind(job_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Mark a queue job as failed. If attempts < max_attempts, re-queue it as pending.
+    pub async fn fail_queue_job(
+        &self,
+        job_id: i64,
+        error: &str,
+    ) -> Result<(), sqlx::Error> {
+        // Increment attempts and set error message
+        sqlx::query(
+            r#"UPDATE game_queue
+               SET attempts = attempts + 1, error_message = ?
+               WHERE id = ?"#,
+        )
+        .bind(error)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+
+        // If under max attempts, re-queue; otherwise mark failed
+        sqlx::query(
+            r#"UPDATE game_queue
+               SET status = CASE
+                   WHEN attempts < max_attempts THEN 'pending'
+                   ELSE 'failed'
+               END,
+               worker_id = NULL,
+               claimed_at = NULL
+               WHERE id = ?"#,
+        )
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get queue depth and status counts.
+    pub async fn queue_status(&self) -> Result<GameQueueStatus, sqlx::Error> {
+        #[derive(sqlx::FromRow)]
+        struct StatusCount {
+            status: String,
+            cnt: i64,
+        }
+        let rows: Vec<StatusCount> = sqlx::query_as(
+            "SELECT status, COUNT(*) as cnt FROM game_queue GROUP BY status",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut pending = 0i64;
+        let mut claimed = 0i64;
+        let mut completed = 0i64;
+        let mut failed = 0i64;
+        for r in &rows {
+            match r.status.as_str() {
+                "pending" => pending = r.cnt,
+                "claimed" => claimed = r.cnt,
+                "completed" => completed = r.cnt,
+                "failed" => failed = r.cnt,
+                _ => {}
+            }
+        }
+        Ok(GameQueueStatus {
+            pending,
+            claimed,
+            completed,
+            failed,
+            total: pending + claimed + completed + failed,
+        })
+    }
+
+    /// Reset any jobs that were claimed but never completed (e.g. from a crashed worker).
+    /// Resets jobs claimed more than 30 minutes ago back to pending.
+    pub async fn cleanup_stale_queue_jobs(&self) -> Result<u64, sqlx::Error> {
+        let sql = if self.is_postgres {
+            r#"UPDATE game_queue SET status = 'pending', worker_id = NULL, claimed_at = NULL
+               WHERE status = 'claimed'
+               AND claimed_at < (now() - interval '30 minutes')::text"#
+        } else {
+            r#"UPDATE game_queue SET status = 'pending', worker_id = NULL, claimed_at = NULL
+               WHERE status = 'claimed'
+               AND claimed_at < datetime('now', '-30 minutes')"#
+        };
+        let result = sqlx::query(sql).execute(&self.pool).await?;
+        Ok(result.rows_affected())
     }
 }
 

@@ -12,6 +12,7 @@ mod queue;
 mod rate_limit;
 mod replay;
 mod tournament;
+mod worker_pool;
 
 use axum::{
     body::Body,
@@ -27,8 +28,8 @@ use tower_http::cors::CorsLayer;
 
 use config::Config;
 use engine::server::GameServer;
-use queue::GameQueue;
 use rate_limit::RateLimiter;
+use worker_pool::WorkerPool;
 
 async fn health_check() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "infon-backend" }))
@@ -113,16 +114,33 @@ async fn main() {
         Err(e) => tracing::error!("Failed to clean up orphaned tournaments: {e}"),
     }
 
+    // Clean up stale queue jobs from crashed workers
+    match db.cleanup_stale_queue_jobs().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("Reset {n} stale queue jobs back to pending"),
+        Err(e) => tracing::error!("Failed to clean up stale queue jobs: {e}"),
+    }
+
     let game_server = Arc::new(GameServer::new());
     let rate_limiter = RateLimiter::new();
-    let game_queue = GameQueue::new();
+    let worker_pool = Arc::new(WorkerPool::new(cfg.worker_count));
+
+    tracing::info!(
+        "Worker pool: {} parallel headless game workers, polling every {}ms",
+        cfg.worker_count,
+        cfg.queue_poll_ms
+    );
+
+    // Generate a unique worker ID for this process
+    let worker_id = format!("worker-{}", std::process::id());
 
     // Spawn background queue worker to process pending games
     crate::queue::spawn_queue_worker(
         db.clone(),
-        game_server.clone(),
-        game_queue.clone(),
+        worker_pool,
         cfg.maps_dir.clone(),
+        cfg.queue_poll_ms,
+        worker_id,
     );
 
     // Inject Arc<Database> into request extensions so auth extractors can
@@ -144,7 +162,6 @@ async fn main() {
             db,
             game_server,
             rate_limiter,
-            game_queue,
             cfg.maps_dir.clone(),
         ))
         .layer(CorsLayer::permissive())

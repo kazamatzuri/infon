@@ -20,7 +20,7 @@ use crate::db::Database;
 use crate::engine::server::{self, GameResult, GameServer, PlayerEntry};
 use crate::engine::world::World;
 use crate::metrics;
-use crate::queue::GameQueue;
+use crate::queue::run_game_completion;
 use crate::rate_limit::{RateLimitType, RateLimiter};
 use crate::tournament::{
     generate_round_robin_pairings, generate_single_elimination_bracket, generate_swiss_pairings,
@@ -156,7 +156,6 @@ pub struct AppState {
     pub game_server: Arc<GameServer>,
     pub maps_dir: PathBuf,
     pub rate_limiter: RateLimiter,
-    pub game_queue: GameQueue,
 }
 
 // ── Error helper ──────────────────────────────────────────────────────
@@ -176,7 +175,6 @@ pub fn router(
     db: Arc<Database>,
     game_server: Arc<GameServer>,
     rate_limiter: RateLimiter,
-    game_queue: GameQueue,
     maps_dir: PathBuf,
 ) -> Router {
     let state = AppState {
@@ -184,7 +182,6 @@ pub fn router(
         game_server,
         maps_dir,
         rate_limiter,
-        game_queue,
     };
 
     Router::new()
@@ -911,22 +908,12 @@ async fn run_tournament(
     // Create and queue matches for each pairing
     let mut match_ids = Vec::new();
     for (vid_a, vid_b) in &pairings {
-        // Load bot versions for names
+        // Verify both bot versions exist
         let va = state.db.get_bot_version_by_id(*vid_a).await;
         let vb = state.db.get_bot_version_by_id(*vid_b).await;
-
-        let (va, vb) = match (va, vb) {
-            (Ok(Some(a)), Ok(Some(b))) => (a, b),
+        match (va, vb) {
+            (Ok(Some(_)), Ok(Some(_))) => {}
             _ => continue,
-        };
-
-        let name_a = match state.db.get_bot(va.bot_id).await {
-            Ok(Some(b)) => format!("{} v{}", b.name, va.version),
-            _ => format!("Bot v{}", va.version),
-        };
-        let name_b = match state.db.get_bot(vb.bot_id).await {
-            Ok(Some(b)) => format!("{} v{}", b.name, vb.version),
-            _ => format!("Bot v{}", vb.version),
         };
 
         // Create match in DB
@@ -938,22 +925,14 @@ async fn run_tournament(
         let _ = state.db.add_match_participant(m.id, *vid_b, 1).await;
         let _ = state.db.add_tournament_match(tournament_id, m.id, 1).await;
 
-        // Queue the match
-        state.game_queue.enqueue(crate::queue::QueueEntry {
-            match_id: m.id,
-            players: vec![
-                crate::queue::QueuePlayer {
-                    bot_version_id: *vid_a,
-                    name: name_a,
-                },
-                crate::queue::QueuePlayer {
-                    bot_version_id: *vid_b,
-                    name: name_b,
-                },
-            ],
-            map: Some(tournament.map.clone()),
-            headless: true, // tournament matches run headless
-        });
+        // Queue the match via DB — tournament matches get priority 10
+        if let Err(e) = state
+            .db
+            .enqueue_game(m.id, Some(&tournament.map), 10)
+            .await
+        {
+            tracing::error!("Failed to enqueue tournament match {}: {e}", m.id);
+        }
 
         match_ids.push(m.id);
     }
@@ -1224,20 +1203,16 @@ async fn start_game(
     let headless = req.headless.unwrap_or(false);
 
     if headless {
-        // Queue headless game
-        state.game_queue.enqueue(crate::queue::QueueEntry {
-            match_id: m.id,
-            players: players
-                .iter()
-                .zip(bot_version_ids.iter())
-                .map(|(p, &bvid)| crate::queue::QueuePlayer {
-                    bot_version_id: bvid,
-                    name: p.name.clone(),
-                })
-                .collect(),
-            map: req.map.clone(),
-            headless: true,
-        });
+        // Queue headless game via DB
+        if let Err(e) = state
+            .db
+            .enqueue_game(m.id, req.map.as_deref(), 0)
+            .await
+        {
+            tracing::error!("Failed to enqueue headless game: {e}");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue game")
+                .into_response();
+        }
 
         return (
             StatusCode::OK,
@@ -1256,7 +1231,6 @@ async fn start_game(
         m.id,
         bot_version_ids.clone(),
         format.to_string(),
-        state.game_queue.clone(),
     );
 
     match state.game_server.start_game_with_callback(
@@ -1473,21 +1447,16 @@ async fn create_challenge(
     }
 
     if headless {
-        state.game_queue.enqueue(crate::queue::QueueEntry {
-            match_id: m.id,
-            players: vec![
-                crate::queue::QueuePlayer {
-                    bot_version_id: req.bot_version_id,
-                    name: bot_a_name.clone(),
-                },
-                crate::queue::QueuePlayer {
-                    bot_version_id: req.opponent_bot_version_id,
-                    name: bot_b_name.clone(),
-                },
-            ],
-            map: req.map.clone(),
-            headless: true,
-        });
+        // Queue headless challenge via DB
+        if let Err(e) = state
+            .db
+            .enqueue_game(m.id, req.map.as_deref(), 0)
+            .await
+        {
+            tracing::error!("Failed to enqueue headless challenge: {e}");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue game")
+                .into_response();
+        }
 
         return (
             StatusCode::CREATED,
@@ -1502,22 +1471,20 @@ async fn create_challenge(
 
     // Live game: start via GameServer
     if state.game_server.is_running() {
-        // Queue it instead of rejecting
-        state.game_queue.enqueue(crate::queue::QueueEntry {
-            match_id: m.id,
-            players: vec![
-                crate::queue::QueuePlayer {
-                    bot_version_id: req.bot_version_id,
-                    name: bot_a_name.clone(),
-                },
-                crate::queue::QueuePlayer {
-                    bot_version_id: req.opponent_bot_version_id,
-                    name: bot_b_name.clone(),
-                },
-            ],
-            map: req.map.clone(),
-            headless: false,
-        });
+        // Queue it instead of rejecting — priority 0 for ad-hoc challenges
+        if let Err(e) = state
+            .db
+            .enqueue_game(m.id, req.map.as_deref(), 0)
+            .await
+        {
+            tracing::error!("Failed to enqueue challenge: {e}");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to queue game")
+                .into_response();
+        }
+
+        let queue_depth = state.db.queue_status().await
+            .map(|s| s.pending)
+            .unwrap_or(0);
 
         return (
             StatusCode::CREATED,
@@ -1525,7 +1492,7 @@ async fn create_challenge(
                 "match_id": m.id,
                 "status": "queued",
                 "message": "A game is already running. Challenge queued.",
-                "queue_depth": state.game_queue.depth(),
+                "queue_depth": queue_depth,
             })),
         )
             .into_response();
@@ -1558,7 +1525,6 @@ async fn create_challenge(
         m.id,
         version_ids.clone(),
         format.clone(),
-        state.game_queue.clone(),
     );
 
     match state.game_server.start_game_with_callback(
@@ -1589,8 +1555,10 @@ async fn create_challenge(
 // ── Queue status handler ─────────────────────────────────────────────
 
 async fn queue_status(State(state): State<AppState>) -> impl IntoResponse {
-    let status = state.game_queue.status();
-    (StatusCode::OK, Json(json!(status))).into_response()
+    match state.db.queue_status().await {
+        Ok(status) => (StatusCode::OK, Json(json!(status))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
 }
 
 // ── Team handlers ──────────────────────────────────────────────────────
@@ -1850,394 +1818,22 @@ fn hash_token(token: &str) -> String {
 
 // ── Game completion callback builder ──────────────────────────────
 
-/// Build a callback closure that handles post-game bookkeeping:
+/// Build a callback closure that handles post-game bookkeeping for live games:
 /// saving replays, finishing matches, updating Elo ratings and version stats.
+/// This delegates to the shared `run_game_completion` in queue.rs.
 pub fn build_game_completion_callback(
     db: Arc<Database>,
     match_id: i64,
     version_ids: Vec<i64>,
     format: String,
-    game_queue: GameQueue,
 ) -> Box<dyn FnOnce(GameResult) + Send + 'static> {
     let rt = tokio::runtime::Handle::current();
 
-    let db_cb = db.clone();
-    let match_id_cb = match_id;
-    let game_queue_cb = game_queue;
-
     Box::new(move |result: GameResult| {
         rt.spawn(async move {
-            // 1. Save replay
-            if let Err(e) = db
-                .save_replay(match_id, &result.replay_data, result.tick_count)
-                .await
-            {
-                tracing::error!("Failed to save replay for match {match_id}: {e}");
-            }
-
-            // 1b. Mark faulty bot versions
-            for &vid in &result.failed_bot_version_ids {
-                if let Err(e) = db.mark_version_faulty(vid, true).await {
-                    tracing::error!("Failed to mark version {vid} as faulty: {e}");
-                }
-            }
-
-            // 2. Determine winner bot_version_id
-            let winner_version_id = result
-                .winner_player_index
-                .and_then(|idx| version_ids.get(idx).copied());
-
-            // 3. Finish match
-            if let Err(e) = db.finish_match(match_id, winner_version_id).await {
-                tracing::error!("Failed to finish match {match_id}: {e}");
-            }
-
-            // 3b. Create notifications for match participants
-            if let Ok(owner_ids) = db.get_match_participant_owner_ids(match_id).await {
-                let winner_name = if let Some(wid) = winner_version_id {
-                    if let Ok(Some(v)) = db.get_bot_version_by_id(wid).await {
-                        if let Ok(Some(b)) = db.get_bot(v.bot_id).await {
-                            Some(format!("{} v{}", b.name, v.version))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let title = "Match completed".to_string();
-                let message = match winner_name {
-                    Some(name) => format!("Match #{match_id} finished. Winner: {name}"),
-                    None => format!("Match #{match_id} finished (draw)"),
-                };
-                let data = serde_json::json!({ "match_id": match_id }).to_string();
-                for owner_id in owner_ids {
-                    let _ = db
-                        .create_notification(
-                            owner_id,
-                            "match_complete",
-                            &title,
-                            &message,
-                            Some(&data),
-                        )
-                        .await;
-                }
-            }
-
-            // 4. Get participants and update stats + Elo
-            let participants = match db.get_match_participants(match_id).await {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::error!("Failed to get participants for match {match_id}: {e}");
-                    return;
-                }
-            };
-
-            // Update per-participant stats (match by bot_version_id, not index)
-            for p in participants.iter() {
-                let ps = result.player_scores.iter().find(|s| s.bot_version_id == p.bot_version_id);
-                let score = ps.map(|s| s.score).unwrap_or(0);
-                let spawned = ps.map(|s| s.creatures_spawned).unwrap_or(0);
-                let killed = ps.map(|s| s.creatures_killed).unwrap_or(0);
-                let lost_c = ps.map(|s| s.creatures_lost).unwrap_or(0);
-                let won = winner_version_id == Some(p.bot_version_id);
-                let lost = winner_version_id.is_some() && !won;
-                let draw = winner_version_id.is_none();
-                let placement = if won { 1 } else if lost { 2 } else { 0 };
-
-                let _ = db
-                    .update_match_participant(
-                        p.id,
-                        score,
-                        Some(placement),
-                        Some(0),
-                        Some(0),
-                        spawned,
-                        killed,
-                        lost_c,
-                    )
-                    .await;
-
-                let _ = db
-                    .update_version_stats(p.bot_version_id, won, lost, draw, score, spawned, killed, lost_c)
-                    .await;
-            }
-
-            // Elo calculation for 1v1
-            if format == "1v1" && participants.len() == 2 {
-                let p0 = &participants[0];
-                let p1 = &participants[1];
-                let (v0, v1) = match (
-                    db.get_bot_version_by_id(p0.bot_version_id).await,
-                    db.get_bot_version_by_id(p1.bot_version_id).await,
-                ) {
-                    (Ok(Some(v0)), Ok(Some(v1))) => (v0, v1),
-                    _ => return,
-                };
-
-                let outcome_0 = if winner_version_id == Some(p0.bot_version_id) {
-                    crate::elo::Outcome::Win
-                } else if winner_version_id == Some(p1.bot_version_id) {
-                    crate::elo::Outcome::Loss
-                } else {
-                    crate::elo::Outcome::Draw
-                };
-                let outcome_1 = match outcome_0 {
-                    crate::elo::Outcome::Win => crate::elo::Outcome::Loss,
-                    crate::elo::Outcome::Loss => crate::elo::Outcome::Win,
-                    crate::elo::Outcome::Draw => crate::elo::Outcome::Draw,
-                };
-
-                let new_elo_0 = crate::elo::calculate_new_rating(
-                    v0.elo_1v1,
-                    v1.elo_1v1,
-                    outcome_0,
-                    v0.games_played,
-                );
-                let new_elo_1 = crate::elo::calculate_new_rating(
-                    v1.elo_1v1,
-                    v0.elo_1v1,
-                    outcome_1,
-                    v1.games_played,
-                );
-
-                // Update elo_before/elo_after on participants (match by bot_version_id)
-                let ps0 = result.player_scores.iter().find(|s| s.bot_version_id == p0.bot_version_id);
-                let ps1 = result.player_scores.iter().find(|s| s.bot_version_id == p1.bot_version_id);
-
-                let _ = db
-                    .update_match_participant(
-                        p0.id,
-                        ps0.map(|s| s.score).unwrap_or(0),
-                        Some(if outcome_0 == crate::elo::Outcome::Win {
-                            1
-                        } else {
-                            2
-                        }),
-                        Some(v0.elo_1v1),
-                        Some(new_elo_0),
-                        ps0.map(|s| s.creatures_spawned).unwrap_or(0),
-                        ps0.map(|s| s.creatures_killed).unwrap_or(0),
-                        ps0.map(|s| s.creatures_lost).unwrap_or(0),
-                    )
-                    .await;
-                let _ = db
-                    .update_match_participant(
-                        p1.id,
-                        ps1.map(|s| s.score).unwrap_or(0),
-                        Some(if outcome_1 == crate::elo::Outcome::Win {
-                            1
-                        } else {
-                            2
-                        }),
-                        Some(v1.elo_1v1),
-                        Some(new_elo_1),
-                        ps1.map(|s| s.creatures_spawned).unwrap_or(0),
-                        ps1.map(|s| s.creatures_killed).unwrap_or(0),
-                        ps1.map(|s| s.creatures_lost).unwrap_or(0),
-                    )
-                    .await;
-
-                let _ = db.update_version_elo(p0.bot_version_id, new_elo_0).await;
-                let _ = db.update_version_elo(p1.bot_version_id, new_elo_1).await;
-            }
-
-            // FFA placement scoring
-            if format == "ffa" && participants.len() > 2 {
-                // Sort participants by score descending to determine placement
-                let mut sorted: Vec<&crate::db::MatchParticipant> =
-                    participants.iter().collect();
-                sorted.sort_by(|a, b| {
-                    let score_a = result.player_scores.iter()
-                        .find(|s| s.bot_version_id == a.bot_version_id)
-                        .map(|s| s.score).unwrap_or(0);
-                    let score_b = result.player_scores.iter()
-                        .find(|s| s.bot_version_id == b.bot_version_id)
-                        .map(|s| s.score).unwrap_or(0);
-                    score_b.cmp(&score_a)
-                });
-
-                let n_players = participants.len() as i32;
-                for (placement_idx, p) in sorted.iter().enumerate() {
-                    let placement = (placement_idx + 1) as i32;
-                    let points = crate::elo::ffa_placement_points(placement, n_players);
-                    let _ = db.update_version_ffa_stats(p.bot_version_id, points).await;
-                }
-            }
-
-            // Tournament advancement: check if this match belongs to a tournament
-            if let Ok(Some((tournament_id, round))) =
-                db_cb.get_tournament_for_match(match_id_cb).await
-            {
-                // Save tournament results for each participant (match by bot_version_id)
-                for p in participants.iter() {
-                    let ps = result.player_scores.iter().find(|s| s.bot_version_id == p.bot_version_id);
-                    let score = ps.map(|s| s.score).unwrap_or(0);
-                    let _ = db_cb
-                        .add_tournament_result(
-                            tournament_id,
-                            p.player_slot,
-                            p.bot_version_id,
-                            score,
-                            ps.map(|s| s.creatures_spawned).unwrap_or(0),
-                            ps.map(|s| s.creatures_killed).unwrap_or(0),
-                            ps.map(|s| s.creatures_lost).unwrap_or(0),
-                        )
-                        .await;
-                }
-
-                // Check if all matches in this round are finished
-                if let Ok(round_matches) = db_cb
-                    .list_tournament_matches_by_round(tournament_id, round)
-                    .await
-                {
-                    let mut all_finished = true;
-                    for tm in &round_matches {
-                        if let Ok(Some(m)) = db_cb.get_match(tm.match_id).await {
-                            if m.status != "finished" {
-                                all_finished = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    if all_finished {
-                        if let Ok(Some(tournament)) = db_cb.get_tournament(tournament_id).await {
-                            let fmt = crate::tournament::TournamentFormat::from_str_name(
-                                &tournament.format,
-                            )
-                            .unwrap_or(crate::tournament::TournamentFormat::RoundRobin);
-                            let n_participants = db_cb
-                                .list_tournament_entries(tournament_id)
-                                .await
-                                .map(|e| e.len())
-                                .unwrap_or(0);
-                            let num_rounds = crate::tournament::total_rounds(&fmt, n_participants);
-
-                            if round < num_rounds as i32 {
-                                advance_tournament_round(
-                                    db_cb.clone(),
-                                    game_queue_cb.clone(),
-                                    tournament_id,
-                                    round + 1,
-                                    &fmt,
-                                    &tournament.map,
-                                )
-                                .await;
-                            } else {
-                                let _ = db_cb
-                                    .update_tournament_status(tournament_id, "finished")
-                                    .await;
-                            }
-                        }
-                    }
-                }
-            }
+            run_game_completion(&db, match_id, &version_ids, &format, &result).await;
         });
     })
-}
-
-// ── Tournament advancement helpers ────────────────────────────────────
-
-async fn advance_tournament_round(
-    db: Arc<Database>,
-    game_queue: GameQueue,
-    tournament_id: i64,
-    next_round: i32,
-    format: &TournamentFormat,
-    map: &str,
-) {
-    // Get all tournament entries (original participants)
-    let entries = match db.list_tournament_entries(tournament_id).await {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    let all_version_ids: Vec<i64> = entries.iter().map(|e| e.bot_version_id).collect();
-
-    let pairings = match format {
-        TournamentFormat::SingleElimination => {
-            // Get winners from previous round matches
-            let prev_matches = db
-                .list_tournament_matches_by_round(tournament_id, next_round - 1)
-                .await
-                .unwrap_or_default();
-            let mut winners = Vec::new();
-            for tm in &prev_matches {
-                if let Ok(Some(m)) = db.get_match(tm.match_id).await {
-                    if let Some(winner_id) = m.winner_bot_version_id {
-                        winners.push(winner_id);
-                    }
-                }
-            }
-            generate_single_elimination_bracket(&winners)
-        }
-        TournamentFormat::Swiss { .. } => {
-            // Build standings from all tournament results so far
-            let standings = db
-                .get_tournament_standings(tournament_id)
-                .await
-                .unwrap_or_default();
-            let standings_tuples: Vec<(i64, f64)> = standings
-                .iter()
-                .map(|s| (s.bot_version_id, s.total_score as f64))
-                .collect();
-            generate_swiss_pairings(&all_version_ids, &standings_tuples, next_round as usize)
-        }
-        TournamentFormat::RoundRobin => {
-            // Round robin has only 1 round, should not reach here
-            return;
-        }
-    };
-
-    if pairings.is_empty() {
-        let _ = db.update_tournament_status(tournament_id, "finished").await;
-        return;
-    }
-
-    // Create and queue matches for this round
-    for (vid_a, vid_b) in &pairings {
-        let name_a = get_bot_display_name(&db, *vid_a).await;
-        let name_b = get_bot_display_name(&db, *vid_b).await;
-
-        let m = match db.create_match("1v1", map).await {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let _ = db.add_match_participant(m.id, *vid_a, 0).await;
-        let _ = db.add_match_participant(m.id, *vid_b, 1).await;
-        let _ = db
-            .add_tournament_match(tournament_id, m.id, next_round)
-            .await;
-
-        game_queue.enqueue(crate::queue::QueueEntry {
-            match_id: m.id,
-            players: vec![
-                crate::queue::QueuePlayer {
-                    bot_version_id: *vid_a,
-                    name: name_a,
-                },
-                crate::queue::QueuePlayer {
-                    bot_version_id: *vid_b,
-                    name: name_b,
-                },
-            ],
-            map: Some(map.to_string()),
-            headless: true,
-        });
-    }
-
-    let _ = db.update_tournament_round(tournament_id, next_round).await;
-}
-
-async fn get_bot_display_name(db: &Database, version_id: i64) -> String {
-    if let Ok(Some(v)) = db.get_bot_version_by_id(version_id).await {
-        if let Ok(Some(b)) = db.get_bot(v.bot_id).await {
-            return format!("{} v{}", b.name, v.version);
-        }
-    }
-    format!("Bot v{}", version_id)
 }
 
 // ── Documentation handlers ────────────────────────────────────────────

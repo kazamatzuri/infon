@@ -16,6 +16,10 @@ pub struct Config {
     /// Directory containing pre-built frontend files to serve.
     /// When set, the backend serves static files from this path.
     pub static_dir: Option<PathBuf>,
+    /// Number of parallel headless game workers.
+    pub worker_count: usize,
+    /// Interval in milliseconds between queue polls.
+    pub queue_poll_ms: u64,
 }
 
 impl Config {
@@ -54,12 +58,24 @@ impl Config {
 
         let static_dir = std::env::var("STATIC_DIR").ok().map(PathBuf::from);
 
+        let worker_count = std::env::var("INFON_WORKER_COUNT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4);
+
+        let queue_poll_ms = std::env::var("INFON_QUEUE_POLL_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000);
+
         Config {
             database_url,
             port,
             maps_dir,
             local_mode,
             static_dir,
+            worker_count,
+            queue_poll_ms,
         }
     }
 

@@ -10,3 +10,4 @@ pub mod queue;
 pub mod rate_limit;
 pub mod replay;
 pub mod tournament;
+pub mod worker_pool;

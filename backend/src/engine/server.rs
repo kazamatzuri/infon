@@ -152,6 +152,225 @@ pub struct ActiveGameInfo {
     pub game_time_seconds: f64,
 }
 
+/// Run a game headless (no WebSocket broadcast, no per-tick sleep).
+/// Runs synchronously on the calling thread and returns a GameResult.
+/// Used by the worker pool for parallel headless game execution.
+pub fn run_game_headless(
+    world: World,
+    players: Vec<PlayerEntry>,
+    max_ticks: u64,
+    match_id: Option<i64>,
+    bot_version_ids: Vec<i64>,
+) -> GameResult {
+    let format_label = if players.len() == 2 {
+        "1v1"
+    } else if players.len() > 2 {
+        "ffa"
+    } else {
+        "other"
+    }
+    .to_string();
+
+    metrics::GAMES_STARTED_TOTAL
+        .with_label_values(&[&format_label])
+        .inc();
+    let game_start_time = std::time::Instant::now();
+
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut game = Game::new(world);
+        let mut recorder = ReplayRecorder::new();
+
+        // Add players and spawn initial creatures
+        let mut player_ids = Vec::new();
+        let mut failed_version_ids: Vec<i64> = Vec::new();
+        for (i, entry) in players.iter().enumerate() {
+            match game.add_player(&entry.name, &entry.code) {
+                Ok(pid) => {
+                    player_ids.push(pid);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to add player '{}': {}", entry.name, e);
+                    if let Some(&vid) = bot_version_ids.get(i) {
+                        failed_version_ids.push(vid);
+                    }
+                }
+            }
+        }
+
+        // If too few players loaded successfully, skip the game loop
+        let early_exit = player_ids.len() <= 1 && players.len() >= 2;
+
+        // Auto-generate food spawners if the map has none
+        game.ensure_food_spawners();
+        game.seed_initial_food();
+
+        // Spawn initial creatures
+        for &pid in &player_ids {
+            for _ in 0..2 {
+                let tile = game.world.borrow().find_plain_tile();
+                if let Some((tx_pos, ty_pos)) = tile {
+                    let cx = World::tile_center(tx_pos);
+                    let cy = World::tile_center(ty_pos);
+                    game.spawn_creature(pid, cx, cy, CREATURE_SMALL);
+                }
+            }
+        }
+
+        // Record initial world snapshot
+        let world_snap = game.world_snapshot();
+        let world_msg = GameMessage::WorldInit(world_snap);
+        if let Ok(json) = serde_json::to_string(&world_msg) {
+            recorder.record_message(&json);
+        }
+
+        // Game loop — no sleep, no broadcast
+        let mut tick_count: u64 = 0;
+        let mut winner: Option<u32> = None;
+
+        if early_exit {
+            tracing::info!(
+                "Only {} of {} players loaded — skipping game loop",
+                player_ids.len(),
+                players.len()
+            );
+            if player_ids.len() == 1 {
+                winner = Some(player_ids[0]);
+            }
+        }
+
+        while !early_exit && tick_count < max_ticks {
+            let tick_start = std::time::Instant::now();
+            game.tick();
+            let tick_elapsed_ms = tick_start.elapsed().as_secs_f64() * 1000.0;
+            metrics::GAME_TICK_DURATION_MS.observe(tick_elapsed_ms);
+            tick_count += 1;
+
+            // Record snapshot periodically for replay (every 10 ticks)
+            if tick_count % 10 == 1 {
+                let snapshot = game.snapshot();
+                let msg = GameMessage::Snapshot(snapshot);
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    recorder.record_message(&json);
+                }
+            }
+
+            // Check win conditions
+            if let Some(w) = game.check_score_limit_winner() {
+                winner = Some(w);
+                break;
+            }
+            if let Some(w) = game.check_winner() {
+                winner = Some(w);
+                break;
+            }
+        }
+
+        // Game ended — determine final result
+        let final_snap = game.snapshot();
+        let winner = winner.or_else(|| {
+            let max_score = final_snap.players.iter().map(|p| p.score).max()?;
+            let top: Vec<_> = final_snap
+                .players
+                .iter()
+                .filter(|p| p.score == max_score)
+                .collect();
+            if top.len() == 1 {
+                Some(top[0].id)
+            } else {
+                None
+            }
+        });
+
+        // Record final snapshot
+        let end_msg = GameMessage::GameEnd {
+            winner,
+            final_scores: final_snap.players.clone(),
+            match_id,
+            player_stats: player_ids
+                .iter()
+                .map(|&pid| {
+                    let stats = game.player_stats(pid);
+                    PlayerEndStats {
+                        player_id: pid,
+                        creatures_spawned: stats.creatures_spawned,
+                        creatures_killed: stats.creatures_killed,
+                        creatures_lost: stats.creatures_lost,
+                    }
+                })
+                .collect(),
+            game_duration_ticks: tick_count,
+        };
+        if let Ok(json) = serde_json::to_string(&end_msg) {
+            recorder.record_message(&json);
+        }
+
+        let winner_player_index = winner
+            .and_then(|winner_id| player_ids.iter().position(|&pid| pid == winner_id));
+
+        let player_scores: Vec<PlayerScore> = final_snap
+            .players
+            .iter()
+            .enumerate()
+            .map(|(i, ps)| {
+                let pid = player_ids.get(i).copied().unwrap_or(0);
+                let stats = game.player_stats(pid);
+                PlayerScore {
+                    player_index: i,
+                    bot_version_id: bot_version_ids.get(i).copied().unwrap_or(0),
+                    score: ps.score,
+                    creatures_spawned: stats.creatures_spawned,
+                    creatures_killed: stats.creatures_killed,
+                    creatures_lost: stats.creatures_lost,
+                }
+            })
+            .collect();
+
+        // Record metrics
+        let game_elapsed_secs = game_start_time.elapsed().as_secs_f64();
+        metrics::GAMES_COMPLETED_TOTAL
+            .with_label_values(&[&format_label])
+            .inc();
+        metrics::GAME_DURATION_SECONDS
+            .with_label_values(&[&format_label])
+            .observe(game_elapsed_secs);
+
+        GameResult {
+            match_id,
+            winner_player_index,
+            player_scores,
+            replay_data: recorder.finish(),
+            tick_count: tick_count as i32,
+            failed_bot_version_ids: failed_version_ids,
+        }
+    }));
+
+    match result {
+        Ok(game_result) => game_result,
+        Err(panic_info) => {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            tracing::error!("Headless game panicked: {}", msg);
+            metrics::GAMES_ERRORED_TOTAL
+                .with_label_values(&[&format_label])
+                .inc();
+            // Return an empty result indicating failure
+            GameResult {
+                match_id,
+                winner_player_index: None,
+                player_scores: vec![],
+                replay_data: vec![],
+                tick_count: 0,
+                failed_bot_version_ids: vec![],
+            }
+        }
+    }
+}
+
 /// Manages a single game instance, running the game loop on a dedicated thread
 /// and broadcasting snapshots to WebSocket subscribers via a broadcast channel.
 pub struct GameServer {
