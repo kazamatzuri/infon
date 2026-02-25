@@ -113,6 +113,7 @@ pub struct MatchListParams {
     pub username: Option<String>,
     pub sort: Option<String>,
     pub status: Option<String>,
+    pub map: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1295,6 +1296,7 @@ async fn list_matches(
             params.user_id,
             params.username.as_deref(),
             params.status.as_deref(),
+            params.map.as_deref(),
             sort,
         )
         .await

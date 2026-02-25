@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { ActiveGameInfo, Bot, MatchDetail } from '../api/client';
+import type { ActiveGameInfo, Bot, MapInfo, MatchDetail } from '../api/client';
 
 type MatchWithPlayers = MatchDetail['match'] & { players?: string[] };
 
@@ -9,6 +9,7 @@ interface MatchFilters {
   bot_id?: number;
   username?: string;
   status?: string;
+  map?: string;
   sort: 'newest' | 'oldest';
 }
 
@@ -71,6 +72,7 @@ export function GameList() {
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [allBots, setAllBots] = useState<Bot[]>([]);
+  const [maps, setMaps] = useState<MapInfo[]>([]);
   const [filters, setFilters] = useState<MatchFilters>({ sort: 'newest' });
   const [usernameInput, setUsernameInput] = useState('');
   const filtersRef = useRef(filters);
@@ -82,6 +84,8 @@ export function GameList() {
       .then(r => r.ok ? r.json() : [])
       .then(setAllBots)
       .catch(() => {});
+    // Fetch maps for map filter dropdown
+    api.listMaps().then(setMaps).catch(() => {});
   }, []);
 
   const buildOpts = useCallback((f: MatchFilters, offset: number) => {
@@ -89,6 +93,7 @@ export function GameList() {
     if (f.bot_id) opts.bot_id = f.bot_id;
     if (f.username) opts.username = f.username;
     if (f.status) opts.status = f.status;
+    if (f.map) opts.map = f.map;
     opts.sort = f.sort;
     return opts;
   }, []);
@@ -336,6 +341,26 @@ export function GameList() {
           <option value="running">Running</option>
           <option value="pending">Pending</option>
           <option value="abandoned">Abandoned</option>
+        </select>
+
+        {/* Map filter */}
+        <select
+          value={filters.map ?? ''}
+          onChange={e => updateFilter({ map: e.target.value || undefined })}
+          style={{
+            padding: '6px 10px',
+            background: '#16213e',
+            color: '#e0e0e0',
+            border: '1px solid #333',
+            borderRadius: '4px',
+            fontSize: '13px',
+          }}
+        >
+          <option value="">All Maps</option>
+          <option value="random">Random Generated</option>
+          {maps.map(m => (
+            <option key={m.name} value={m.name}>{m.name}</option>
+          ))}
         </select>
 
         {/* Sort toggle */}

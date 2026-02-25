@@ -131,21 +131,40 @@ export function Challenge() {
             Challenge created!
           </p>
           <p style={{ color: '#aaa', fontSize: 13, marginBottom: 12 }}>
-            {result.status === 'queued' || result.status === 'pending'
+            {result.status === 'queued'
               ? 'Match is queued — replay will be available once it finishes.'
-              : `Status: ${result.status ?? 'pending'}`
+              : result.status === 'running'
+                ? 'Game is running live!'
+                : `Status: ${result.status ?? 'pending'}`
             }
           </p>
-          <Link
-            to={`/matches/${result.match_id ?? result.id}`}
-            style={{
-              display: 'inline-block', padding: '8px 24px', background: '#16c79a',
-              color: '#fff', borderRadius: 4, textDecoration: 'none',
-              fontSize: 14, fontWeight: 600,
-            }}
-          >
-            View Match
-          </Link>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            {result.status === 'running' && (
+              <Link
+                to="/game"
+                style={{
+                  display: 'inline-block', padding: '8px 24px', background: '#16c79a',
+                  color: '#fff', borderRadius: 4, textDecoration: 'none',
+                  fontSize: 14, fontWeight: 600,
+                }}
+              >
+                Watch Live
+              </Link>
+            )}
+            <Link
+              to={`/matches/${result.match_id ?? result.id}`}
+              style={{
+                display: 'inline-block', padding: '8px 24px',
+                background: result.status === 'running' ? 'transparent' : '#16c79a',
+                color: result.status === 'running' ? '#16c79a' : '#fff',
+                border: result.status === 'running' ? '1px solid #16c79a' : 'none',
+                borderRadius: 4, textDecoration: 'none',
+                fontSize: 14, fontWeight: 600,
+              }}
+            >
+              View Match
+            </Link>
+          </div>
         </div>
       )}
 

@@ -1291,6 +1291,7 @@ impl Database {
         user_id: Option<i64>,
         username: Option<&str>,
         status: Option<&str>,
+        map: Option<&str>,
         sort: &str,
     ) -> Result<Vec<Match>, sqlx::Error> {
         let needs_join = bot_id.is_some() || user_id.is_some() || username.is_some();
@@ -1329,6 +1330,10 @@ impl Database {
             param_index += 1;
             conditions.push(format!("m.status = ${param_index}"));
         }
+        if map.is_some() {
+            param_index += 1;
+            conditions.push(format!("m.map = ${param_index}"));
+        }
 
         if !conditions.is_empty() {
             sql.push_str(" WHERE ");
@@ -1357,6 +1362,9 @@ impl Database {
         }
         if let Some(st) = status {
             query = query.bind(st.to_string());
+        }
+        if let Some(m) = map {
+            query = query.bind(m.to_string());
         }
         query = query.bind(limit);
         query = query.bind(offset);

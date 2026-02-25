@@ -476,7 +476,7 @@ export const api = {
     fetch(`${BASE_URL}/api/matches/${matchId}/replay`, { headers: authHeaders() }).then(r => handleResponse<ReplayData>(r)),
 
   // Match listing
-  listMatches: (opts?: { limit?: number; offset?: number; bot_id?: number; user_id?: number; username?: string; sort?: 'newest' | 'oldest'; status?: string }): Promise<(MatchDetail['match'] & { players?: string[] })[]> => {
+  listMatches: (opts?: { limit?: number; offset?: number; bot_id?: number; user_id?: number; username?: string; sort?: 'newest' | 'oldest'; status?: string; map?: string }): Promise<(MatchDetail['match'] & { players?: string[] })[]> => {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set('limit', String(opts.limit));
     if (opts?.offset != null) params.set('offset', String(opts.offset));
@@ -485,6 +485,7 @@ export const api = {
     if (opts?.username) params.set('username', opts.username);
     if (opts?.sort) params.set('sort', opts.sort);
     if (opts?.status) params.set('status', opts.status);
+    if (opts?.map) params.set('map', opts.map);
     const qs = params.toString();
     return fetch(`${BASE_URL}/api/matches${qs ? '?' + qs : ''}`, { headers: authHeaders() }).then(r => handleResponse<(MatchDetail['match'] & { players?: string[] })[]>(r));
   },

@@ -154,6 +154,14 @@ export function MatchDetail() {
           ))}
       </div>
 
+      {m.status === 'running' && (
+        <div>
+          <Link to="/game" style={btnWatchLive}>
+            Watch Live
+          </Link>
+        </div>
+      )}
+
       {(m.status === 'finished' || m.status === 'abandoned') && (
         <div>
           {replayError && (
@@ -180,6 +188,11 @@ const metaValue: React.CSSProperties = {
 const btnReplay: React.CSSProperties = {
   background: '#f5a623', color: '#000', border: 'none', padding: '10px 32px',
   borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '14px',
+};
+const btnWatchLive: React.CSSProperties = {
+  display: 'inline-block', background: '#16c79a', color: '#fff', border: 'none',
+  padding: '10px 32px', borderRadius: '6px', cursor: 'pointer', fontWeight: 700,
+  fontSize: '14px', textDecoration: 'none',
 };
 const btnBack: React.CSSProperties = {
   background: 'transparent', color: '#f5a623', border: '1px solid #f5a623',
