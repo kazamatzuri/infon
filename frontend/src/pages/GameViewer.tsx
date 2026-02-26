@@ -29,6 +29,11 @@ export function GameViewer() {
   const [gameEnded, setGameEnded] = useState(false);
   const [headless, setHeadless] = useState(false);
   const [queuedMatchId, setQueuedMatchId] = useState<number | null>(null);
+  const [mapWidth, setMapWidth] = useState(30);
+  const [mapHeight, setMapHeight] = useState(30);
+  const [mapFoodSpots, setMapFoodSpots] = useState(10);
+
+  const isRandomMap = !selectedMap || selectedMap === 'random' || selectedMap === 'default';
 
   // Check game status and load bots on mount
   useEffect(() => {
@@ -111,7 +116,8 @@ export function GameViewer() {
 
     setStarting(true);
     try {
-      const result = await api.startGame(players, selectedMap, headless || undefined);
+      const mapParams = isRandomMap ? { width: mapWidth, height: mapHeight, num_food_spots: mapFoodSpots } : undefined;
+      const result = await api.startGame(players, selectedMap, headless || undefined, mapParams);
       if (result.status === 'queued' && result.match_id) {
         setQueuedMatchId(result.match_id);
       } else {
@@ -172,7 +178,9 @@ export function GameViewer() {
 
   // Setup phase
   return (
-    <div style={{ padding: '32px', maxWidth: '700px', margin: '0 auto' }}>
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '32px', gap: '0', maxWidth: '1000px', margin: '0 auto' }}>
+      {/* Main form */}
+      <div style={{ maxWidth: '700px', width: '100%', flexShrink: 1, minWidth: 0 }}>
       <h2 style={{ color: '#e0e0e0', marginBottom: '8px' }}>Start a Game</h2>
       <p style={{ color: '#888', fontSize: '14px', marginBottom: '24px' }}>
         Select bots from your library to compete against each other.
@@ -289,6 +297,62 @@ export function GameViewer() {
           </div>
         </>
       )}
+      </div>
+
+      {/* Sliding settings panel on the right */}
+      <div style={{
+        marginLeft: isRandomMap ? '24px' : '0px',
+        flexShrink: 0,
+        opacity: isRandomMap ? 1 : 0,
+        pointerEvents: isRandomMap ? 'auto' : 'none',
+        width: isRandomMap ? '220px' : '0px',
+        overflow: isRandomMap ? 'visible' : 'hidden',
+        transition: 'width 0.3s ease, opacity 0.25s ease, margin-left 0.3s ease',
+      }}>
+        <div style={{
+          width: '220px',
+          background: '#16213e',
+          borderRadius: '8px',
+          padding: '20px',
+          marginTop: '52px',
+          border: '1px solid #333',
+          boxSizing: 'border-box',
+        }}>
+          <div style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '14px', marginBottom: '20px' }}>
+            Map Settings
+          </div>
+
+          <div style={{ marginBottom: '18px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label style={{ color: '#888', fontSize: '12px' }}>Width</label>
+              <span style={{ color: '#f5a623', fontSize: '12px', fontWeight: 600 }}>{mapWidth}</span>
+            </div>
+            <input type="range" min={20} max={150} value={mapWidth}
+              onChange={e => setMapWidth(Number(e.target.value))}
+              style={{ width: '100%', accentColor: '#f5a623' }} />
+          </div>
+
+          <div style={{ marginBottom: '18px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label style={{ color: '#888', fontSize: '12px' }}>Height</label>
+              <span style={{ color: '#f5a623', fontSize: '12px', fontWeight: 600 }}>{mapHeight}</span>
+            </div>
+            <input type="range" min={20} max={150} value={mapHeight}
+              onChange={e => setMapHeight(Number(e.target.value))}
+              style={{ width: '100%', accentColor: '#f5a623' }} />
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label style={{ color: '#888', fontSize: '12px' }}>Food Patches</label>
+              <span style={{ color: '#f5a623', fontSize: '12px', fontWeight: 600 }}>{mapFoodSpots}</span>
+            </div>
+            <input type="range" min={1} max={200} value={mapFoodSpots}
+              onChange={e => setMapFoodSpots(Number(e.target.value))}
+              style={{ width: '100%', accentColor: '#f5a623' }} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

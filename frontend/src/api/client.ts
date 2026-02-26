@@ -443,11 +443,11 @@ export const api = {
   listMaps: (): Promise<MapInfo[]> =>
     fetch(`${BASE_URL}/api/maps`).then(r => handleResponse<MapInfo[]>(r)),
 
-  startGame: (players: { bot_version_id: number; name?: string }[], map?: string, headless?: boolean): Promise<{ status: string; message: string; match_id?: number }> =>
+  startGame: (players: { bot_version_id: number; name?: string }[], map?: string, headless?: boolean, map_params?: { width?: number; height?: number; num_food_spots?: number }): Promise<{ status: string; message: string; match_id?: number }> =>
     fetch(`${BASE_URL}/api/game/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ players, map, headless }),
+      body: JSON.stringify({ players, map, headless, map_params }),
     }).then(r => handleResponse<{ status: string; message: string; match_id?: number }>(r)),
 
   stopGame: (): Promise<void> =>

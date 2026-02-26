@@ -9,7 +9,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -66,11 +66,19 @@ pub struct AddTournamentEntryRequest {
     pub slot_name: Option<String>,
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct MapParamsRequest {
+    pub width: Option<usize>,
+    pub height: Option<usize>,
+    pub num_food_spots: Option<usize>,
+}
+
 #[derive(Deserialize)]
 pub struct StartGameRequest {
     pub players: Vec<StartGamePlayer>,
     pub map: Option<String>,
     pub headless: Option<bool>,
+    pub map_params: Option<MapParamsRequest>,
 }
 
 #[derive(Deserialize)]
@@ -929,7 +937,7 @@ async fn run_tournament(
         // Queue the match via DB — tournament matches get priority 10
         if let Err(e) = state
             .db
-            .enqueue_game(m.id, Some(&tournament.map), 10)
+            .enqueue_game(m.id, Some(&tournament.map), 10, None)
             .await
         {
             tracing::error!("Failed to enqueue tournament match {}: {e}", m.id);
@@ -986,11 +994,19 @@ async fn list_maps(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Resolve an optional map name to a World.
-pub fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>) -> Result<World, String> {
+pub fn resolve_map(maps_dir: &std::path::Path, map: &Option<String>, map_params: Option<&MapParamsRequest>) -> Result<World, String> {
     use crate::engine::world::RandomMapParams;
     use rand::seq::SliceRandom;
     match map.as_deref() {
-        None | Some("random") | Some("default") => Ok(World::generate_random(RandomMapParams::default())),
+        None | Some("random") | Some("default") => {
+            let mut params = RandomMapParams::default();
+            if let Some(mp) = map_params {
+                if let Some(w) = mp.width { params.width = w.clamp(20, 150); }
+                if let Some(h) = mp.height { params.height = h.clamp(20, 150); }
+                if let Some(f) = mp.num_food_spots { params.num_food_spots = f.clamp(1, 200); }
+            }
+            Ok(World::generate_random(params))
+        }
         Some("random_pool") => {
             let available = server::list_maps(maps_dir);
             if available.is_empty() {
@@ -1174,7 +1190,7 @@ async fn start_game(
         });
     }
 
-    let world = match resolve_map(&state.maps_dir, &req.map) {
+    let world = match resolve_map(&state.maps_dir, &req.map, req.map_params.as_ref()) {
         Ok(w) => w,
         Err(e) => {
             return json_error(StatusCode::BAD_REQUEST, &format!("Invalid map: {}", e))
@@ -1205,9 +1221,10 @@ async fn start_game(
 
     if headless {
         // Queue headless game via DB
+        let map_params_json = req.map_params.as_ref().and_then(|mp| serde_json::to_string(mp).ok());
         if let Err(e) = state
             .db
-            .enqueue_game(m.id, req.map.as_deref(), 0)
+            .enqueue_game(m.id, req.map.as_deref(), 0, map_params_json.as_deref())
             .await
         {
             tracing::error!("Failed to enqueue headless game: {e}");
@@ -1452,7 +1469,7 @@ async fn create_challenge(
         // Queue headless challenge via DB
         if let Err(e) = state
             .db
-            .enqueue_game(m.id, req.map.as_deref(), 0)
+            .enqueue_game(m.id, req.map.as_deref(), 0, None)
             .await
         {
             tracing::error!("Failed to enqueue headless challenge: {e}");
@@ -1476,7 +1493,7 @@ async fn create_challenge(
         // Queue it instead of rejecting — priority 0 for ad-hoc challenges
         if let Err(e) = state
             .db
-            .enqueue_game(m.id, req.map.as_deref(), 0)
+            .enqueue_game(m.id, req.map.as_deref(), 0, None)
             .await
         {
             tracing::error!("Failed to enqueue challenge: {e}");
@@ -1501,7 +1518,7 @@ async fn create_challenge(
     }
 
     // Resolve map
-    let world = match resolve_map(&state.maps_dir, &req.map) {
+    let world = match resolve_map(&state.maps_dir, &req.map, None) {
         Ok(w) => w,
         Err(e) => {
             return json_error(StatusCode::BAD_REQUEST, &format!("Invalid map: {}", e))

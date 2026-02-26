@@ -63,6 +63,12 @@ export function ReplayCanvas({ messages }: ReplayCanvasProps) {
   const drawRef = useRef<() => void>(() => {});
   const lastWorldRef = useRef<WorldMsg | null>(null);
 
+  // Viewport state for zoom/pan
+  const viewportRef = useRef({ offsetX: 0, offsetY: 0, zoom: 1 });
+    const isPanningRef = useRef(false);
+  const lastPanRef = useRef({ x: 0, y: 0 });
+  const spaceDownRef = useRef(false);
+
   // Playback state
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -159,7 +165,9 @@ export function ReplayCanvas({ messages }: ReplayCanvasProps) {
     const ctx = canvas.getContext('2d')!;
     const worldPixelWidth = world.width * TILE_SIZE;
     const worldPixelHeight = world.height * TILE_SIZE;
-    const scale = Math.min(canvas.width / worldPixelWidth, canvas.height / worldPixelHeight);
+    const baseScale = Math.min(canvas.width / worldPixelWidth, canvas.height / worldPixelHeight);
+    const vp = viewportRef.current;
+    const scale = baseScale * vp.zoom;
 
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -175,6 +183,9 @@ export function ReplayCanvas({ messages }: ReplayCanvasProps) {
     }
 
     ctx.imageSmoothingEnabled = false;
+
+    ctx.save();
+    ctx.translate(vp.offsetX, vp.offsetY);
 
     if (lastWorldRef.current !== world) {
       creatureCacheRef.current.clear();
@@ -268,9 +279,104 @@ export function ReplayCanvas({ messages }: ReplayCanvasProps) {
       }
     }
 
+    ctx.restore();
+
+    // Zoom indicator
+    if (vp.zoom > 1.01) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(canvas.width - 60, 8, 52, 22);
+      ctx.fillStyle = '#f5a623';
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${vp.zoom.toFixed(1)}x`, canvas.width - 14, 23);
+    }
+
     animFrameRef.current = requestAnimationFrame(drawRef.current);
   }, []);
   useEffect(() => { drawRef.current = draw; }, [draw]);
+
+  // Zoom/pan event handlers
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const clampPan = () => {
+      const world = worldRef.current;
+      if (!world) return;
+      const vp = viewportRef.current;
+      const worldPixelW = world.width * TILE_SIZE;
+      const worldPixelH = world.height * TILE_SIZE;
+      const bs = Math.min(canvas.width / worldPixelW, canvas.height / worldPixelH);
+      const s = bs * vp.zoom;
+      const scaledW = worldPixelW * s;
+      const scaledH = worldPixelH * s;
+      vp.offsetX = Math.min(0, Math.max(canvas.width - scaledW, vp.offsetX));
+      vp.offsetY = Math.min(0, Math.max(canvas.height - scaledH, vp.offsetY));
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const vp = viewportRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const oldZoom = vp.zoom;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      vp.zoom = Math.min(10, Math.max(1, vp.zoom * factor));
+      const zoomRatio = vp.zoom / oldZoom;
+      vp.offsetX = mx - (mx - vp.offsetX) * zoomRatio;
+      vp.offsetY = my - (my - vp.offsetY) * zoomRatio;
+      clampPan();
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
+        isPanningRef.current = true;
+        lastPanRef.current = { x: e.clientX, y: e.clientY };
+        e.preventDefault();
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isPanningRef.current) return;
+      const vp = viewportRef.current;
+      vp.offsetX += e.clientX - lastPanRef.current.x;
+      vp.offsetY += e.clientY - lastPanRef.current.y;
+      lastPanRef.current = { x: e.clientX, y: e.clientY };
+      clampPan();
+    };
+
+    const onMouseUp = () => { isPanningRef.current = false; };
+
+    const onDblClick = () => {
+      viewportRef.current = { offsetX: 0, offsetY: 0, zoom: 1 };
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') { spaceDownRef.current = true; e.preventDefault(); }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spaceDownRef.current = false;
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('dblclick', onDblClick);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
+    return () => {
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      canvas.removeEventListener('dblclick', onDblClick);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
 
   // Render loop
   useEffect(() => {

@@ -94,8 +94,11 @@ pub fn spawn_queue_worker(
                 continue;
             }
 
-            // Resolve map
-            let world = match resolve_map(&maps_dir, &job.map) {
+            // Resolve map (deserialize map_params if present)
+            let map_params: Option<crate::api::MapParamsRequest> = job.map_params
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            let world = match resolve_map(&maps_dir, &job.map, map_params.as_ref()) {
                 Ok(w) => w,
                 Err(e) => {
                     tracing::error!("Queue worker: invalid map for match {}: {e}", job.match_id);
@@ -520,7 +523,7 @@ async fn advance_tournament_round(
             .await;
 
         // Enqueue via DB — tournament matches get priority 10
-        if let Err(e) = db.enqueue_game(m.id, Some(map), 10).await {
+        if let Err(e) = db.enqueue_game(m.id, Some(map), 10, None).await {
             tracing::error!("Failed to enqueue tournament match {}: {e}", m.id);
         }
     }

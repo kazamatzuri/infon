@@ -275,6 +275,7 @@ pub struct QueueJob {
     pub status: String,
     pub worker_id: Option<String>,
     pub map: Option<String>,
+    pub map_params: Option<String>,
     pub priority: i32,
     pub attempts: i32,
     pub max_attempts: i32,
@@ -537,6 +538,7 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'pending',
                 worker_id TEXT,
                 map TEXT,
+                map_params TEXT,
                 headless BOOLEAN NOT NULL DEFAULT TRUE,
                 priority INTEGER NOT NULL DEFAULT 0,
                 attempts INTEGER NOT NULL DEFAULT 0,
@@ -552,6 +554,9 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_game_queue_pending
             ON game_queue(status, priority DESC, created_at)
         "#).await?;
+
+        // Add map_params column to existing game_queue tables
+        let _ = self.exec("ALTER TABLE game_queue ADD COLUMN map_params TEXT").await;
 
         Ok(())
     }
@@ -807,6 +812,7 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'pending',
                 worker_id TEXT,
                 map TEXT,
+                map_params TEXT,
                 headless INTEGER NOT NULL DEFAULT 1,
                 priority INTEGER NOT NULL DEFAULT 0,
                 attempts INTEGER NOT NULL DEFAULT 0,
@@ -822,6 +828,9 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_game_queue_pending
             ON game_queue(status, priority DESC, created_at)
         "#).await?;
+
+        // Add map_params column to existing game_queue tables
+        let _ = self.exec("ALTER TABLE game_queue ADD COLUMN map_params TEXT").await;
 
         Ok(())
     }
@@ -2216,7 +2225,7 @@ impl Database {
         data: Option<&str>,
     ) -> Result<Notification, sqlx::Error> {
         let row = sqlx::query_as::<_, Notification>(
-            "INSERT INTO notifications (user_id, type, title, message, data) VALUES (?, ?, ?, ?, ?) RETURNING id, user_id, type, title, message, data, read, created_at",
+            "INSERT INTO notifications (user_id, type, title, message, data) VALUES ($1, $2, $3, $4, $5) RETURNING id, user_id, type, title, message, data, read, created_at",
         )
         .bind(user_id)
         .bind(notification_type)
@@ -2233,7 +2242,7 @@ impl Database {
         user_id: i64,
     ) -> Result<Vec<Notification>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Notification>(
-            "SELECT id, user_id, type, title, message, data, read, created_at FROM notifications WHERE user_id = ? AND read = 0 ORDER BY id DESC LIMIT 50",
+            "SELECT id, user_id, type, title, message, data, read, created_at FROM notifications WHERE user_id = $1 AND read = 0 ORDER BY id DESC LIMIT 50",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -2247,7 +2256,7 @@ impl Database {
         limit: i64,
     ) -> Result<Vec<Notification>, sqlx::Error> {
         let rows = sqlx::query_as::<_, Notification>(
-            "SELECT id, user_id, type, title, message, data, read, created_at FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, user_id, type, title, message, data, read, created_at FROM notifications WHERE user_id = $1 ORDER BY id DESC LIMIT $2",
         )
         .bind(user_id)
         .bind(limit)
@@ -2262,7 +2271,7 @@ impl Database {
         user_id: i64,
     ) -> Result<bool, sqlx::Error> {
         let result =
-            sqlx::query("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?")
+            sqlx::query("UPDATE notifications SET read = 1 WHERE id = $1 AND user_id = $2")
                 .bind(id)
                 .bind(user_id)
                 .execute(&self.pool)
@@ -2272,7 +2281,7 @@ impl Database {
 
     pub async fn unread_notification_count(&self, user_id: i64) -> Result<i64, sqlx::Error> {
         let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read = 0",
+            "SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read = 0",
         )
         .bind(user_id)
         .fetch_one(&self.pool)
@@ -2291,7 +2300,7 @@ impl Database {
             FROM match_participants mp
             JOIN bot_versions bv ON bv.id = mp.bot_version_id
             JOIN bots b ON b.id = bv.bot_id
-            WHERE mp.match_id = ? AND b.owner_id IS NOT NULL
+            WHERE mp.match_id = $1 AND b.owner_id IS NOT NULL
             "#,
         )
         .bind(match_id)
@@ -2309,7 +2318,7 @@ impl Database {
         description: &str,
     ) -> Result<Feedback, sqlx::Error> {
         let row = sqlx::query_as::<_, Feedback>(
-            "INSERT INTO feedback (user_id, category, description) VALUES (?, ?, ?) RETURNING id, user_id, category, description, created_at",
+            "INSERT INTO feedback (user_id, category, description) VALUES ($1, $2, $3) RETURNING id, user_id, category, description, created_at",
         )
         .bind(user_id)
         .bind(category)
@@ -2336,17 +2345,19 @@ impl Database {
         match_id: i64,
         map: Option<&str>,
         priority: i32,
+        map_params: Option<&str>,
     ) -> Result<QueueJob, sqlx::Error> {
         let row = sqlx::query_as::<_, QueueJob>(
-            r#"INSERT INTO game_queue (match_id, map, priority)
-               VALUES (?, ?, ?)
-               RETURNING id, match_id, status, worker_id, map, priority,
+            r#"INSERT INTO game_queue (match_id, map, priority, map_params)
+               VALUES ($1, $2, $3, $4)
+               RETURNING id, match_id, status, worker_id, map, map_params, priority,
                          attempts, max_attempts, error_message,
                          claimed_at, completed_at, created_at"#,
         )
         .bind(match_id)
         .bind(map)
         .bind(priority)
+        .bind(map_params)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -2371,7 +2382,7 @@ impl Database {
                        LIMIT 1
                        FOR UPDATE SKIP LOCKED
                    )
-                   RETURNING id, match_id, status, worker_id, map, priority,
+                   RETURNING id, match_id, status, worker_id, map, map_params, priority,
                              attempts, max_attempts, error_message,
                              claimed_at, completed_at, created_at"#,
             );
@@ -2390,7 +2401,7 @@ impl Database {
                        ORDER BY priority DESC, created_at ASC
                        LIMIT 1
                    )
-                   RETURNING id, match_id, status, worker_id, map, priority,
+                   RETURNING id, match_id, status, worker_id, map, map_params, priority,
                              attempts, max_attempts, error_message,
                              claimed_at, completed_at, created_at"#,
             );
@@ -2406,7 +2417,7 @@ impl Database {
     pub async fn complete_queue_job(&self, job_id: i64) -> Result<(), sqlx::Error> {
         let now = self.now_expr();
         let sql = format!(
-            "UPDATE game_queue SET status = 'completed', completed_at = {now} WHERE id = ?"
+            "UPDATE game_queue SET status = 'completed', completed_at = {now} WHERE id = $1"
         );
         sqlx::query(&sql).bind(job_id).execute(&self.pool).await?;
         Ok(())
@@ -2421,8 +2432,8 @@ impl Database {
         // Increment attempts and set error message
         sqlx::query(
             r#"UPDATE game_queue
-               SET attempts = attempts + 1, error_message = ?
-               WHERE id = ?"#,
+               SET attempts = attempts + 1, error_message = $1
+               WHERE id = $2"#,
         )
         .bind(error)
         .bind(job_id)
@@ -2438,7 +2449,7 @@ impl Database {
                END,
                worker_id = NULL,
                claimed_at = NULL
-               WHERE id = ?"#,
+               WHERE id = $1"#,
         )
         .bind(job_id)
         .execute(&self.pool)

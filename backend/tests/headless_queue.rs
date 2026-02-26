@@ -152,7 +152,7 @@ async fn test_enqueue_and_claim_job() {
     let m = db.create_match("1v1", "random").await.unwrap();
 
     // Enqueue
-    let job = db.enqueue_game(m.id, Some("random"), 0).await.unwrap();
+    let job = db.enqueue_game(m.id, Some("random"), 0, None).await.unwrap();
     assert_eq!(job.match_id, m.id);
     assert_eq!(job.status, "pending");
     assert_eq!(job.priority, 0);
@@ -174,7 +174,7 @@ async fn test_enqueue_and_claim_job() {
 async fn test_complete_queue_job() {
     let db = test_db().await;
     let m = db.create_match("1v1", "random").await.unwrap();
-    db.enqueue_game(m.id, None, 0).await.unwrap();
+    db.enqueue_game(m.id, None, 0, None).await.unwrap();
 
     let job = db.claim_queue_job("w1").await.unwrap().unwrap();
     db.complete_queue_job(job.id).await.unwrap();
@@ -193,7 +193,7 @@ async fn test_complete_queue_job() {
 async fn test_fail_queue_job_retries() {
     let db = test_db().await;
     let m = db.create_match("1v1", "random").await.unwrap();
-    db.enqueue_game(m.id, None, 0).await.unwrap();
+    db.enqueue_game(m.id, None, 0, None).await.unwrap();
 
     // Claim and fail
     let job = db.claim_queue_job("w1").await.unwrap().unwrap();
@@ -231,9 +231,9 @@ async fn test_queue_priority_ordering() {
     let m3 = db.create_match("1v1", "random").await.unwrap();
 
     // Enqueue with different priorities
-    db.enqueue_game(m1.id, None, 0).await.unwrap(); // low priority
-    db.enqueue_game(m2.id, None, 10).await.unwrap(); // high priority (tournament)
-    db.enqueue_game(m3.id, None, 5).await.unwrap(); // medium priority
+    db.enqueue_game(m1.id, None, 0, None).await.unwrap(); // low priority
+    db.enqueue_game(m2.id, None, 10, None).await.unwrap(); // high priority (tournament)
+    db.enqueue_game(m3.id, None, 5, None).await.unwrap(); // medium priority
 
     // Should claim highest priority first
     let job1 = db.claim_queue_job("w1").await.unwrap().unwrap();
@@ -257,9 +257,9 @@ async fn test_queue_status_counts() {
     let m2 = db.create_match("1v1", "random").await.unwrap();
     let m3 = db.create_match("1v1", "random").await.unwrap();
 
-    db.enqueue_game(m1.id, None, 0).await.unwrap();
-    db.enqueue_game(m2.id, None, 0).await.unwrap();
-    db.enqueue_game(m3.id, None, 0).await.unwrap();
+    db.enqueue_game(m1.id, None, 0, None).await.unwrap();
+    db.enqueue_game(m2.id, None, 0, None).await.unwrap();
+    db.enqueue_game(m3.id, None, 0, None).await.unwrap();
 
     let status = db.queue_status().await.unwrap();
     assert_eq!(status.pending, 3);
@@ -442,7 +442,7 @@ async fn test_end_to_end_enqueue_and_process() {
     db.add_match_participant(m.id, vb.id, 1).await.unwrap();
 
     // Enqueue the match
-    let job = db.enqueue_game(m.id, None, 0).await.unwrap();
+    let job = db.enqueue_game(m.id, None, 0, None).await.unwrap();
 
     // Claim the job (simulating what the queue worker does)
     let claimed = db.claim_queue_job("test-worker").await.unwrap().unwrap();
